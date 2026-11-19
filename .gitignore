@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+
+# Secrets and environment variables
+.env
+*.env
+
+# IDE
+.idea/
+.vscode/
+.vs/
+
+# Project data and user settings
+data/
+core/settings.json
