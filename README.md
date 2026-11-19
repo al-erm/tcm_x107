@@ -4,6 +4,8 @@
 ![PyQt6-Qt6](https://img.shields.io/badge/PyQt6--Qt6-6.6.0%2B-2CDE85)
 
 Application for measuring current vs temperature: TCM-X107 temperature controller (USB → RS-232) and Keithley 6487 picoammeter (GPIB via NI-VISA) with real-time graphs and tab-separated data export.
+<img width="1314" height="891" alt="image" src="https://github.com/user-attachments/assets/b40c86bc-d57d-4259-ad59-71bbe59a1d83" />
+
 
 ---
 
