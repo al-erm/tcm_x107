@@ -26,6 +26,21 @@ try:
 except ImportError:  # pragma: no cover
     pyvisa = None  # type: ignore
 
+try:
+    from config import (
+        SOURCE_CURRENT_LIMIT_10V,
+        SOURCE_CURRENT_LIMIT_50V_500V,
+        SOURCE_VOLTAGE_RANGE_10,
+        SOURCE_VOLTAGE_RANGE_50,
+        SOURCE_VOLTAGE_RANGE_500,
+    )  # noqa: E402
+except ImportError:  # pragma: no cover
+    SOURCE_VOLTAGE_RANGE_10 = 10.0
+    SOURCE_VOLTAGE_RANGE_50 = 50.0
+    SOURCE_VOLTAGE_RANGE_500 = 500.0
+    SOURCE_CURRENT_LIMIT_10V = 0.025
+    SOURCE_CURRENT_LIMIT_50V_500V = 0.0025
+
 
 class Keithley6487Error(Exception):
     pass
@@ -75,6 +90,11 @@ class Keithley6487:
         self.zero_check(True)
         if self._inst is not None:
             try:
+                # Turn the voltage source output off before closing the session.
+                try:
+                    self.set_source_output(False)
+                except Exception:
+                    pass
                 # Go To Local: switch instrument to local mode before closing the GPIB session,
                 # so the REMOTE/Talk indicator goes off right after disconnect.
                 try:
@@ -119,39 +139,8 @@ class Keithley6487:
         """Return instrument identification string (*IDN?)."""
         return self.query("*IDN?")
 
-    def configure(
-        self,
-        nplc: float = 1.0,
-        current_range: Optional[float] = None,
-        auto_range: bool = True,
-        zero_check: bool = False,
-    ) -> None:
-        """Configure the picoammeter for current measurement.
-
-        Parameters
-        ----------
-        nplc : float
-            Integration time in power-line cycles (e.g. 0.01, 1, 10).
-        current_range : float | None
-            Fixed range in Amperes (e.g. 2e-6). If None and auto_range is
-            False, the instrument keeps its current range setting.
-        auto_range : bool
-            Enable automatic current ranging.
-        zero_check : bool
-            Enable ZERO CHECK before measuring. Usually OFF during measurement;
-            enable only when you need to null input offset.
-        """
-
-        self.write(":FORM:ELEM READ")
-        self.set_nplc(nplc)
-        if auto_range:
-            self.auto_range(True)
-        elif current_range is not None:
-            self.set_range(current_range)
-        self.zero_check(zero_check)
-
     # ------------------------------------------------------------------
-    # Buffer measurements (N points at once: time + current)
+    # Buffer measurements (N points at once: current)
     # ------------------------------------------------------------------
 
     def configure_buffer(self, count: int, nplc: float = 1.0) -> None:
@@ -163,10 +152,11 @@ class Keithley6487:
         if count < 1:
             raise Keithley6487Error("Buffer count must be >= 1")
         self.write(':DAMP 1')
-        self.write(f":SENS:CURR:NPLC {nplc}")  # noqa: E231
+        self.set_nplc(nplc)
         self.write(':TRIG:DEL 0')
         self.auto_range(True)
         self.write(":FORM:ELEM READ")
+        self.write(":TRAC:FEED:CONT NEV")
         self.write(f":TRIG:COUN {count}")  # noqa: E231
         self.write(f":TRAC:POIN {count}")  # noqa: E231
         self.write(":TRAC:FEED SENS")
@@ -190,6 +180,20 @@ class Keithley6487:
         if not points:
             raise Keithley6487Error(f"No data in buffer response: {raw!r}")
         return points
+
+    def measure_current_single(self) -> float:
+        """Measure current once without touching the buffer."""
+        self.clear_errors()
+        raw = self.query(":FORM:ELEM READ;DATA ASC;:MEAS?")
+        errs = self._check_errors()
+        if errs:
+            detail = "; ".join(errs)
+            raise Keithley6487Error(f"Keithley SCPI errors during measure_current_single: {detail}")
+        return float(raw)
+
+    def get_buffer_count(self) -> int:
+        """Return the currently configured buffer count."""
+        return self._buffer_count
 
     def set_nplc(self, nplc: float) -> None:
         """Set integration time in power-line cycles."""
@@ -220,11 +224,52 @@ class Keithley6487:
         """Perform ZERO CORRECT once (:SYST:ZERO:CORR ONCE)."""
         self.write(":SYST:ZERO:CORR ONCE")
 
+    def auto_zero(self) -> None:
+        """Simulation of "ONCE" mode."""
+        self.write(":SYST:AZER ON")
+        self.write(":SYST:AZER OFF")
+        self.write("*CLS")
+
     # ------------------------------------------------------------------
     # Built-in voltage source (Keithley 6487)
     # ------------------------------------------------------------------
+    def set_source_voltage_range(self, range_v: float) -> None:
+        """Set the voltage source range (:SOUR:VOLT:RANG), e.g. 10, 50 or 500 V."""
+        self.write(f":SOUR:VOLT:RANG {float(range_v):g}")
+        self._check_errors()
+
+    def set_source_current_limit(self, limit_a: float) -> None:
+        """Set the voltage source current limit (:SOUR:VOLT:ILIM) in Amperes."""
+        self.write(f":SOUR:VOLT:ILIM {float(limit_a):g}")
+        self._check_errors()
+
     def set_source_voltage(self, value: float) -> None:
-        """Set the built-in voltage source level (V)."""
+        """Set the built-in voltage source level (V).
+
+        Automatically selects the correct source range and current limit:
+        - |V| <= 10 V     -> range 10 V, current limit 25 mA
+        - 10 V < |V| <= 50 V -> range 50 V, current limit 2.5 mA
+        - |V| > 50 V      -> range 500 V, current limit 2.5 mA
+        """
+        value = float(value)
+        abs_v = abs(value)
+        if abs_v <= SOURCE_VOLTAGE_RANGE_10:
+            self.set_source_voltage_range(SOURCE_VOLTAGE_RANGE_10)
+            self.set_source_current_limit(SOURCE_CURRENT_LIMIT_10V)
+        elif abs_v <= SOURCE_VOLTAGE_RANGE_50:
+            self.set_source_voltage_range(SOURCE_VOLTAGE_RANGE_50)
+            self.set_source_current_limit(SOURCE_CURRENT_LIMIT_50V_500V)
+        else:
+            self.set_source_voltage_range(SOURCE_VOLTAGE_RANGE_500)
+            self.set_source_current_limit(SOURCE_CURRENT_LIMIT_50V_500V)
+        
+        self.set_source_voltage_only(value)
+
+    def set_source_voltage_only(self, value: float) -> None:
+        """Set only the voltage source level (:SOUR:VOLT) without changing range/ILIM.
+
+        Used during a smooth ramp where the range was already selected beforehand.
+        """
         text = f"{float(value):.6f}".replace(",", ".")
         self.write(f":SOUR:VOLT {text}")
         self._check_errors()

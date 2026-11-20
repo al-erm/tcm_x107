@@ -36,6 +36,10 @@ DEFAULTS: dict[str, Any] = {
     "meas_count": 1,
     # Voltage at the picoammeter built-in voltage source
     "source_voltage": 0.0,
+    # Smooth voltage ramp settings (Keithley 6487 source)
+    "source_ramp": False,
+    "source_ramp_time": 10.0,
+    "source_ramp_steps": 10,
     # UI-only options
     "window_width": 1400,
     "window_height": 900,

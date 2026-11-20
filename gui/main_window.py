@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QSplitter, QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox,
     QSpinBox, QCheckBox, QMessageBox, QDialog, QStatusBar, QTabWidget, QComboBox,
+    QProgressBar,
 )  # noqa: E402
 from PyQt6.QtGui import QFont, QFontMetrics  # noqa: E402
 
@@ -29,7 +30,8 @@ from config import (
     TCM_PORT, TCM_BAUDRATE, TCM_TIMEOUT, TCM_WRITE_TIMEOUT,
     KEITHLEY_VISA_ADDRESS, KEITHLEY_TIMEOUT_MS,
     SAFETY_MIN_TEMP, SAFETY_MAX_TEMP, UPDATE_INTERVAL_MS, PLOT_MAX_POINTS,
-    TEMP_STATUS_THRESHOLD, EXPORT_FILENAME, EXPORT_DIR
+    TEMP_STATUS_THRESHOLD, EXPORT_FILENAME, EXPORT_DIR,
+    SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS
 )  # noqa: E402
 
 from instruments.tcm_x107 import TCMX107, TCMX107Error  # noqa: E402
@@ -127,6 +129,232 @@ class MeasurementWorker(QObject):
             self.samples_ready.emit(currents, curr, curr_err, list(outlier_indices))
         except Exception as exc:
             self.error_occurred.emit(str(exc))
+
+
+class RampWorker(QObject):
+    """Worker that performs a smooth voltage ramp in a background thread."""
+
+    progress = pyqtSignal(int)
+    voltage_changed = pyqtSignal(float)
+    current_changed = pyqtSignal(float)
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(self, keithley: Keithley6487, target_v: float,
+                 algorithm: str, ramp_time: float, steps: int,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.keithley = keithley
+        self.target_v = float(target_v)
+        self.algorithm = algorithm
+        self.ramp_time = float(ramp_time)
+        self.steps = max(1, int(steps))
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        self._stop_requested = True
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            current_v = 0.0
+            # Setting the source voltage to zero and switching it on.
+            self.keithley.set_source_voltage_only(current_v)
+            self.keithley.set_source_output(True)
+            for i in range(self.steps):
+                if self._stop_requested:
+                    break
+                if self.algorithm == "linear":
+                    next_v = self.target_v * (i + 1) / self.steps
+                else:
+                    if i == self.steps - 1:
+                        next_v = self.target_v
+                    else:
+                        denom = 3.0 - i * (2.0 / max(self.steps - 1, 1))
+                        remaining = self.target_v - current_v
+                        next_v = current_v + remaining * (1.0 / denom)
+                # Set only the level (range/ILIM already switched once by set_source_voltage).
+                self.keithley.set_source_voltage_only(next_v)
+                current_v = next_v
+                self.voltage_changed.emit(current_v)
+                # Wait part of the step time so the source settles before measuring.
+                step_time = self.ramp_time / self.steps
+                settle = step_time * 0.4
+                t_end = time.time() + settle
+                while time.time() < t_end:
+                    if self._stop_requested:
+                        break
+                    time.sleep(0.05)
+                if self._stop_requested:
+                    break
+                # Measure current once using :READ? (does not touch the buffer).
+                try:
+                    cur = self.keithley.measure_current_single()
+                except Exception:
+                    cur = float("nan")
+                self.current_changed.emit(cur)
+                # Wait the rest of the step time
+                t_end = time.time() + max(step_time - settle, 0.05)
+                while time.time() < t_end:
+                    if self._stop_requested:
+                        break
+                    time.sleep(0.05)
+                self.progress.emit(int((i + 1) / self.steps * 100))
+        except Exception as exc:
+            self.error.emit(str(exc))
+            return
+        try:
+            if not self._stop_requested:
+                self.keithley.set_source_voltage(self.target_v)
+                self.voltage_changed.emit(self.target_v)
+        except Exception:
+            pass
+        self.finished.emit()
+
+
+class VoltageRampDialog(QDialog):
+    """Modal dialog for smooth voltage ramp with progress bar."""
+
+    rejected_signal = pyqtSignal()
+
+    def __init__(self, keithley: Keithley6487, target_v: float,
+                 parent: "MainWindow" | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("dlg.ramp_title"))
+        self.setModal(True)
+        self.resize(420, 220)
+        self.keithley = keithley
+        self.target_v = float(target_v)
+        self._worker: RampWorker | None = None
+        self._worker_thread: QThread | None = None
+        self._started = False
+
+        layout = QVBoxLayout(self)
+
+        alg_layout = QHBoxLayout()
+        alg_layout.addWidget(QLabel(tr("lbl.ramp_algorithm")))
+        self.combo_alg = QComboBox()
+        self.combo_alg.addItems([tr("ramp.alg.linear"), tr("ramp.alg.nonlinear")])
+        alg_layout.addWidget(self.combo_alg)
+        alg_layout.addStretch()
+        layout.addLayout(alg_layout)
+
+        ts_layout = QHBoxLayout()
+        self.spin_time = QDoubleSpinBox()
+        self.spin_time.setRange(0.1, 3600.0)
+        self.spin_time.setDecimals(1)
+        self.spin_time.setValue(
+            float(parent.settings.get("source_ramp_time", SOURCE_RAMP_DEFAULT_TIME))
+            if parent is not None else SOURCE_RAMP_DEFAULT_TIME
+        )
+        ts_layout.addWidget(QLabel(tr("lbl.ramp_time")))
+        ts_layout.addWidget(self.spin_time)
+        self.spin_steps = QSpinBox()
+        self.spin_steps.setRange(1, 1000)
+        self.spin_steps.setValue(
+            int(parent.settings.get("source_ramp_steps", SOURCE_RAMP_DEFAULT_STEPS))
+            if parent is not None else SOURCE_RAMP_DEFAULT_STEPS
+        )
+        ts_layout.addWidget(QLabel(tr("lbl.ramp_steps")))
+        ts_layout.addWidget(self.spin_steps)
+        ts_layout.addStretch()
+        layout.addLayout(ts_layout)
+
+        layout.addWidget(QLabel(tr("lbl.ramp_progress")))
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        self.lbl_voltage = QLabel(f"{tr('lbl.ramp_voltage')} 0.000 V")
+        self.lbl_current = QLabel(f"{tr('lbl.ramp_current')} -- A")
+        layout.addWidget(self.lbl_voltage)
+        layout.addWidget(self.lbl_current)
+
+        btn_layout = QHBoxLayout()
+        self.btn_start = QPushButton(tr("btn.ramp_start"))
+        self.btn_start.clicked.connect(self._start_ramp)
+        self.btn_close = QPushButton(tr("btn.cancel"))
+        self.btn_close.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_start)
+        btn_layout.addWidget(self.btn_close)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+    def _start_ramp(self) -> None:
+        algorithm = "linear" if self.combo_alg.currentIndex() == 0 else "nonlinear"
+        ramp_time = self.spin_time.value()
+        steps = self.spin_steps.value()
+        parent = self.parent()
+        if parent is not None:
+            parent.settings.set("source_ramp_time", ramp_time)
+            parent.settings.set("source_ramp_steps", steps)
+        self.combo_alg.setEnabled(False)
+        self.spin_time.setEnabled(False)
+        self.spin_steps.setEnabled(False)
+        self.btn_start.setText(tr("btn.ramp_stop"))
+        self.btn_start.clicked.disconnect()
+        self.btn_start.clicked.connect(self._stop_ramp)
+        self._original_buffer_count = self.keithley.get_buffer_count()
+        self._worker = RampWorker(self.keithley, self.target_v, algorithm, ramp_time, steps)
+        self._worker_thread = QThread()
+        self._worker.moveToThread(self._worker_thread)
+        self._worker.progress.connect(self.progress_bar.setValue)
+        self._worker.voltage_changed.connect(self._on_voltage_changed)
+        self._worker.current_changed.connect(self._on_current_changed)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread.start()
+        self._started = True
+
+    def _stop_ramp(self) -> None:
+        if self._worker is not None:
+            self._worker.stop()
+        self.btn_start.setEnabled(False)
+
+    def _on_voltage_changed(self, v: float) -> None:
+        self.lbl_voltage.setText(f"{tr('lbl.ramp_voltage')} {v:.3f} V")
+
+    def _on_current_changed(self, cur: float) -> None:
+        if cur != cur:
+            self.lbl_current.setText(f"{tr('lbl.ramp_current')} -- A")
+        else:
+            self.lbl_current.setText(f"{tr('lbl.ramp_current')} {cur:.6e} A")
+
+    def _on_finished(self) -> None:
+        self._cleanup_thread()
+        self.accept()
+
+    def _on_error(self, msg: str) -> None:
+        self._cleanup_thread()
+        QMessageBox.critical(self, tr("err.title_measure"), msg)
+        self.reject()
+
+    def _cleanup_thread(self) -> None:
+        if self._worker_thread is not None:
+            self._worker_thread.quit()
+            if not self._worker_thread.wait(3000):
+                self._worker_thread.terminate()
+                self._worker_thread.wait()
+            self._worker_thread = None
+        self._worker = None
+        self.btn_start.setText(tr("btn.ramp_start"))
+        self.btn_start.setEnabled(True)
+        self.btn_start.clicked.disconnect()
+        self.btn_start.clicked.connect(self._start_ramp)
+        self.combo_alg.setEnabled(True)
+        self.spin_time.setEnabled(True)
+        self.spin_steps.setEnabled(True)
+
+    def reject(self) -> None:
+        if self._started and self._worker is not None:
+            self._worker.stop()
+            self._cleanup_thread()
+        else:
+            # Cancel picoammeter built-in source voltage ramp
+            self.rejected_signal.emit()
+        super().reject()
 
 
 class MainWindow(QMainWindow):
@@ -337,6 +565,21 @@ class MainWindow(QMainWindow):
         source_voltage_layout.addWidget(self.btn_apply_voltage)
         keithley_layout.addLayout(source_voltage_layout)
 
+        # Source output ON/OFF checkbox on its own line below the voltage setting.
+        source_output_layout = QHBoxLayout()
+        self.chk_source_output = QCheckBox()
+        self.chk_source_output.stateChanged.connect(self._toggle_source_output)
+        source_output_layout.addWidget(self.chk_source_output)
+        # Smooth ramp checkbox (stored in settings, default OFF).
+        self.chk_source_ramp = QCheckBox()
+        self.chk_source_ramp.setChecked(bool(self.settings.get("source_ramp", False)))
+        self.chk_source_ramp.stateChanged.connect(
+            lambda s: self.settings.set("source_ramp", bool(s))
+        )
+        source_output_layout.addWidget(self.chk_source_ramp)
+        source_output_layout.addStretch()
+        keithley_layout.addLayout(source_output_layout)
+
         meas_layout = QHBoxLayout()
         self.lbl_meas_count = QLabel()
         meas_layout.addWidget(self.lbl_meas_count)
@@ -426,7 +669,7 @@ class MainWindow(QMainWindow):
         self.curve_current_temp_all = self.plot_current_temp_all.plot(
             symbol="o", 
             symbolSize=6, 
-            symbolBrush=(*themes.PLOT_COLOR_CURRENT_TEMP, 128),
+            symbolBrush=(*themes.PLOT_COLOR_CURRENT_TEMP, 200),
             symbolPen=None,
             pen=None 
         )
@@ -650,6 +893,16 @@ class MainWindow(QMainWindow):
                 self._retranslate_ui()
                 self.btn_apply_voltage.setEnabled(True)
                 self.btn_meas_once.setEnabled(True)
+                self.chk_source_output.setChecked(False)
+                # Apply the voltage value from the spin box to the instrument
+                # (set level only, output stays off) and configure the buffer
+                # for the selected measurement count — without starting a measurement.
+                try:
+                    self.keithley.set_source_voltage(self.spin_source_voltage.value())
+                    self.keithley.configure_buffer(self.spin_meas_count.value())
+                except Exception as exc:
+                    self.statusBar.showMessage(f"Keithley setup: {exc}", 5000)
+                self._show_keithley_errors()
                 self.statusBar.showMessage(tr("msg.keithley_connected").format(address=self.edit_gpib.text()))
             except Exception as exc:
                 self.btn_connect_keithley.setChecked(False)
@@ -664,10 +917,16 @@ class MainWindow(QMainWindow):
                 self._keithley_ident = ""
                 self.btn_apply_voltage.setEnabled(False)
                 self.btn_meas_once.setEnabled(False)
+                self.chk_source_output.setChecked(False)
                 self._retranslate_ui()
                 QMessageBox.critical(self, tr("err.title_keithley"), str(exc))
         else:
             if self.keithley is not None:
+                try:
+                    # Turn the voltage source output off before disconnecting.
+                    self.keithley.set_source_output(False)
+                except Exception:
+                    pass
                 try:
                     self.keithley.disconnect()
                 except Exception:
@@ -676,6 +935,7 @@ class MainWindow(QMainWindow):
             self._keithley_ident = ""
             self.btn_apply_voltage.setEnabled(False)
             self.btn_meas_once.setEnabled(False)
+            self.chk_source_output.setChecked(False)
             self._retranslate_ui()
             self.statusBar.showMessage(tr("msg.keithley_disconnected"))
 
@@ -683,6 +943,8 @@ class MainWindow(QMainWindow):
         if self.keithley is None:
             return
         try:
+            # The source output is enabled separately with the checkbox below
+            # (:SOUR:VOLT:STAT). This button only sets the voltage level.
             self.keithley.set_source_voltage(self.spin_source_voltage.value())
             self.statusBar.showMessage(
                 tr("msg.source_voltage_set").format(voltage=self.spin_source_voltage.value()), 3000
@@ -690,6 +952,36 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, tr("err.title_measure"), str(exc))
         self._show_keithley_errors()
+
+    def _toggle_source_output(self, state) -> None:
+        """Enable/disable the Keithley 6487 voltage source output (:SOUR:VOLT:STAT).
+
+        When turning ON with the smooth-ramp checkbox checked, ramp the voltage
+        smoothly from 0 to the currently set level (modal progress dialog).
+        """
+        if self.keithley is None:
+            return
+        try:
+            if bool(state):
+                if self.chk_source_ramp.isChecked():
+                    # Smooth ramp from 0 to the set voltage.
+                    dlg = VoltageRampDialog(self.keithley, self.spin_source_voltage.value(), self)
+                    dlg.rejected.connect(self._on_ramp_dialog_rejected)
+                    dlg.exec()
+                else:
+                    # Just set the level (range/ILIM switched once by set_source_voltage).
+                    self.keithley.set_source_voltage(self.spin_source_voltage.value())
+                    self.keithley.set_source_output(True)
+            else:
+                self.keithley.set_source_output(False)
+        except Exception as exc:
+            QMessageBox.critical(self, tr("err.title_measure"), str(exc))
+        self._show_keithley_errors()
+
+    def _on_ramp_dialog_rejected(self) -> None:
+        """Handles the automatic cleanup when the VoltageRampDialog is canceled."""
+        if self.chk_source_output.isChecked():
+            self.chk_source_output.click()
 
     def _measure_keithley_once(self) -> None:
         if self.keithley is None:
@@ -787,13 +1079,11 @@ class MainWindow(QMainWindow):
                 # If a measurement already exists for today, pick next free suffix
                 filename = DataManager.get_available_filename(EXPORT_DIR, base_name)
             # Keithley's voltage: informational line in file header.
-            # Not set from the program yet – read from instrument if connected.
+            # Read the actual source voltage from the instrument if connected.
             keithley_voltage = ""
             if self.keithley is not None and self.keithley.is_connected:
                 try:
-                    # Placeholder: Keithley 6487 voltage readback not implemented
-                    # in the driver yet. Keep empty until a query method is added.
-                    keithley_voltage = ""
+                    keithley_voltage = f"{self.keithley.get_source_voltage():.3f} V"
                 except Exception:
                     keithley_voltage = ""
             self.data_manager.start_session(
@@ -832,6 +1122,11 @@ class MainWindow(QMainWindow):
         # Block single-shot measure while continuous acquisition is running
         # to avoid GPIB access conflicts (VI_ERROR_TMO).
         self.btn_meas_once.setEnabled(False)
+        # Also block the source voltage apply button and the output ON/OFF
+        # checkbox while measuring continuously — changing STAT mid-acquisition
+        # causes GPIB errors.
+        self.btn_apply_voltage.setEnabled(False)
+        self.chk_source_output.setEnabled(False)
 
     def _stop_worker(self) -> None:
         """Stop the measurement worker thread."""
@@ -840,6 +1135,8 @@ class MainWindow(QMainWindow):
         # but only if Keithley is actually connected.
         if self.keithley is not None and self.keithley.is_connected:
             self.btn_meas_once.setEnabled(True)
+            self.btn_apply_voltage.setEnabled(True)
+            self.chk_source_output.setEnabled(True)
         if self._worker is not None:
             self._worker.stop()
         if self._worker_thread is not None:
@@ -1035,6 +1332,8 @@ class MainWindow(QMainWindow):
         self.lbl_actual_i.setText(f"{tr('lbl.actual_current')}: -- A")
         self.lbl_info.setText(f"{tr('lbl.info')}: --")
         self.lbl_source_voltage.setText(tr("lbl.source_voltage"))
+        self.chk_source_output.setText(tr("chk.source_output"))
+        self.chk_source_ramp.setText(tr("chk.source_ramp"))
         self.btn_apply_voltage.setText(tr("btn.apply_voltage"))
 
         # --- Keithley 6487 ---
