@@ -221,6 +221,30 @@ class Keithley6487:
         self.write(":SYST:ZERO:CORR ONCE")
 
     # ------------------------------------------------------------------
+    # Built-in voltage source (Keithley 6487)
+    # ------------------------------------------------------------------
+    def set_source_voltage(self, value: float) -> None:
+        """Set the built-in voltage source level (V)."""
+        text = f"{float(value):.6f}".replace(",", ".")
+        self.write(f":SOUR:VOLT {text}")
+        self._check_errors()
+
+    def get_source_voltage(self) -> float:
+        """Query the built-in voltage source level (V)."""
+        raw = self.query(":SOUR:VOLT?")
+        return float(raw)
+
+    def set_source_output(self, state: bool) -> None:
+        """Enable/disable the built-in voltage source output."""
+        self.write(f":SOUR:VOLT:STAT {1 if state else 0}")
+        self._check_errors()
+
+    def get_source_output(self) -> bool:
+        """Query the built-in voltage source output state."""
+        raw = self.query(":SOUR:VOLT:STAT?")
+        return raw.strip() in ("1", "ON")
+
+    # ------------------------------------------------------------------
     # Instrument error queue
     # ------------------------------------------------------------------
 

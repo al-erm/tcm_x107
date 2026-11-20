@@ -49,4 +49,3 @@ def apply_theme(app: QApplication, theme: str) -> None:
 PLOT_COLOR_TEMP = (210, 70, 70)
 PLOT_COLOR_CURRENT = (80, 150, 230)
 PLOT_COLOR_CURRENT_TEMP = (70, 180, 110)
-PLOT_COLOR_FUTURE = (150, 150, 150)

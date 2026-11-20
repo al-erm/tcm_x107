@@ -43,11 +43,6 @@ from gui.i18n import tr  # noqa: E402
 import gui.themes as themes  # noqa: E402
 
 
-# Below this window height the samples plot in the left panel is hidden
-# automatically so the window can be resized down to its minimum height.
-SAMPLES_PLOT_MIN_HEIGHT = 670
-
-
 class MeasurementWorker(QObject):
     data_ready = pyqtSignal(float, float, float, float)
     samples_ready = pyqtSignal(object, float, float, object)
@@ -129,7 +124,6 @@ class MeasurementWorker(QObject):
             )
             pt = self.data_manager.points[-1]
             self.data_ready.emit(pt.timestamp, temp, curr, curr_err)
-            # Emit raw samples for the left-panel plot (residuals + outliers)
             self.samples_ready.emit(currents, curr, curr_err, list(outlier_indices))
         except Exception as exc:
             self.error_occurred.emit(str(exc))
@@ -148,11 +142,13 @@ class MainWindow(QMainWindow):
         self._tcm_model = ""
         self._keithley_ident = ""
         self._current_theme = "system"  # stores current theme for saving when language changes
-        self._show_samples_desired = False  # samples plot: user choice, restored from settings
         self._worker = None
         self._worker_thread = None
         self._gui_timer = None
         self._measure_timer = None
+        # Stem lines / outlier highlights for the current-samples plot (drawn on plot_samples)
+        self._stem_lines: list = []
+        self._scatter_items: list = []
 
         self.settings = SettingsManager()
 
@@ -286,6 +282,8 @@ class MainWindow(QMainWindow):
         self.btn_emergency.clicked.connect(self._emergency_stop)
         tcm_layout.addWidget(self.btn_emergency)
 
+        self.lbl_setpoint_temp = QLabel()
+        tcm_layout.addWidget(self.lbl_setpoint_temp)
         self.lbl_actual_temp = QLabel()
         self.lbl_actual_temp.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         tcm_layout.addWidget(self.lbl_actual_temp)
@@ -323,6 +321,22 @@ class MainWindow(QMainWindow):
         addr_layout.addWidget(self.edit_gpib)
         keithley_layout.addLayout(addr_layout)
 
+        source_voltage_layout = QHBoxLayout()
+        self.lbl_source_voltage = QLabel()
+        source_voltage_layout.addWidget(self.lbl_source_voltage)
+        self.spin_source_voltage = QDoubleSpinBox()
+        self.spin_source_voltage.setRange(-1000.0, 1000.0)
+        self.spin_source_voltage.setDecimals(3)
+        self.spin_source_voltage.setSingleStep(0.1)
+        self.spin_source_voltage.setValue(float(self.settings.get("source_voltage", 0.0)))
+        self.spin_source_voltage.valueChanged.connect(lambda v: self.settings.set("source_voltage", float(v)))
+        source_voltage_layout.addWidget(self.spin_source_voltage)
+        self.btn_apply_voltage = QPushButton(tr("btn.apply_voltage"))
+        self.btn_apply_voltage.setEnabled(False)
+        self.btn_apply_voltage.clicked.connect(self._apply_source_voltage)
+        source_voltage_layout.addWidget(self.btn_apply_voltage)
+        keithley_layout.addLayout(source_voltage_layout)
+
         meas_layout = QHBoxLayout()
         self.lbl_meas_count = QLabel()
         meas_layout.addWidget(self.lbl_meas_count)
@@ -331,6 +345,7 @@ class MainWindow(QMainWindow):
         self.spin_meas_count.setValue(1)
         meas_layout.addWidget(self.spin_meas_count)
         self.btn_meas_once = QPushButton(tr("btn.measure_once"))
+        self.btn_meas_once.setEnabled(False)
         self.btn_meas_once.clicked.connect(self._measure_keithley_once)
         meas_layout.addWidget(self.btn_meas_once)
         keithley_layout.addLayout(meas_layout)
@@ -347,9 +362,6 @@ class MainWindow(QMainWindow):
         self.lbl_keithley_errors.setWordWrap(True)
         err_check_layout.addWidget(self.lbl_keithley_errors)
 
-        self.chk_show_samples = QCheckBox(tr("chk.show_samples"))
-        self.chk_show_samples.setChecked(False)
-        err_check_layout.addWidget(self.chk_show_samples)
         err_check_layout.addStretch()
 
         keithley_layout.addLayout(err_check_layout)
@@ -370,16 +382,6 @@ class MainWindow(QMainWindow):
 
         self.keithley_group.setLayout(keithley_layout)
         left_layout.addWidget(self.keithley_group)
-
-        # --- Current samples plot (left panel) ---
-        self.plot_samples = pg.PlotWidget()
-        self.plot_samples.showGrid(x=True, y=True)
-        self.plot_samples.setMaximumWidth(420)
-        self.plot_samples.setLabel("left", "I − ⟨I⟩", "A")
-        # Keep references, so we can clear and redraw stems / outliers
-        self._stem_lines: list = []
-        self._scatter_items: list = []
-        left_layout.addWidget(self.plot_samples)
 
         left_layout.addStretch()
         splitter.addWidget(left_panel)
@@ -405,7 +407,7 @@ class MainWindow(QMainWindow):
         self.curve_current_temp = self.plot_current_temp.plot(pen=pg.mkPen(themes.PLOT_COLOR_CURRENT_TEMP, width=1.7))
         self.tabs.addTab(self.plot_current_temp, "I vs T")
 
-        # --- Fourth tab: overview + reserved for future graph ---
+        # --- Fourth tab ---
         self.all_tab = QWidget()
         all_layout = QGridLayout(self.all_tab)
 
@@ -424,16 +426,15 @@ class MainWindow(QMainWindow):
         self.curve_current_temp_all = self.plot_current_temp_all.plot(
             symbol="o", 
             symbolSize=6, 
-            symbolBrush=themes.PLOT_COLOR_CURRENT_TEMP,
+            symbolBrush=(*themes.PLOT_COLOR_CURRENT_TEMP, 128),
             symbolPen=None,
             pen=None 
         )
         all_layout.addWidget(self.plot_current_temp_all, 1, 0)
 
-        self.plot_future = pg.PlotWidget()
-        self.plot_future.showGrid(x=True, y=True)
-        self.curve_future = self.plot_future.plot(pen=pg.mkPen(themes.PLOT_COLOR_FUTURE, width=2))
-        all_layout.addWidget(self.plot_future, 1, 1)
+        self.plot_samples = pg.PlotWidget()
+        self.plot_samples.showGrid(x=True, y=True)
+        all_layout.addWidget(self.plot_samples, 1, 1)
 
         self.tabs.addTab(self.all_tab, tr("tab.all"))
 
@@ -489,11 +490,6 @@ class MainWindow(QMainWindow):
         height = self.settings.get("window_height", 900)
         self.resize(width, height)
 
-        # Current samples plot – restored from settings (saved between runs)
-        self.chk_show_samples.setChecked(bool(self.settings.get("show_samples", False)))
-        self._show_samples_desired = self.chk_show_samples.isChecked()
-        self._update_samples_plot_visibility()
-
     def _connect_settings_signals(self) -> None:
         """Connect autosave of settings when widgets change."""
         self.edit_port.editingFinished.connect(lambda: self.settings.set("tcm_port", self.edit_port.text()))
@@ -510,34 +506,11 @@ class MainWindow(QMainWindow):
         # Measurement count
         self.spin_meas_count.valueChanged.connect(lambda v: self.settings.set("meas_count", v))
 
-        # Show samples plot – saved between runs
-        self.chk_show_samples.stateChanged.connect(self._on_show_samples_changed)
-
         # Language and theme are saved in their own change handlers
         # (_on_language_changed, _on_theme_changed).
 
-    def _on_show_samples_changed(self, state: int) -> None:
-        """Save the 'show samples plot' choice and refresh plot visibility.
-
-        The choice is persisted immediately, so it survives between
-        measurements and program restarts.
-        """
-        self._show_samples_desired = bool(state)
-        self.settings.set("show_samples", self._show_samples_desired)
-        self._update_samples_plot_visibility()
-
-    def _update_samples_plot_visibility(self) -> None:
-        """Show the samples plot only if enabled and the window is tall enough.
-
-        Below SAMPLES_PLOT_MIN_HEIGHT the plot is hidden automatically, so it
-        does not prevent the window from being resized to its minimum height.
-        """
-        show = self._show_samples_desired and self.height() >= SAMPLES_PLOT_MIN_HEIGHT
-        self.plot_samples.setVisible(show)
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._update_samples_plot_visibility()
 
     def _apply_styles(self) -> None:
         pass  # widget colors and rendering depend entirely on QStyleHints.setColorScheme()
@@ -612,8 +585,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.tcm.set_ramp_speed(self.spin_ramp.value())
-            self.statusBar.showMessage(
-                f"{tr('label.ramp_speed')} {self.spin_ramp.value()} °C/с")
+            self.statusBar.showMessage(f"{tr('label.ramp_speed')} {self.spin_ramp.value()}")
         except Exception as exc:
             QMessageBox.critical(self, tr("err.generic"), str(exc))
 
@@ -638,6 +610,14 @@ class MainWindow(QMainWindow):
     def _on_profile_update(self, actual: float, set_val: float, timestamp: float) -> None:
         self.lbl_actual_temp.setText(f"{tr('lbl.actual_temp')}: {actual:.2f} °C")  # noqa: E231
         self.lbl_set_temp.setText(f"{tr('lbl.set_temp')}: {set_val:.2f} °C")  # noqa: E231
+        if self.tcm is not None and self.tcm.is_connected:
+            try:
+                setpoint = self.tcm.get_set_temp()
+                self.lbl_setpoint_temp.setText(
+                    f"{tr('lbl.setpoint_temp')}: {setpoint:.2f} °C"  # noqa: E231
+                )
+            except Exception:
+                pass
 
     def _toggle_sw(self, state) -> None:
         if self.tcm is None:
@@ -668,6 +648,8 @@ class MainWindow(QMainWindow):
                 self.keithley.connect()
                 self._keithley_ident = self.keithley.identity()
                 self._retranslate_ui()
+                self.btn_apply_voltage.setEnabled(True)
+                self.btn_meas_once.setEnabled(True)
                 self.statusBar.showMessage(tr("msg.keithley_connected").format(address=self.edit_gpib.text()))
             except Exception as exc:
                 self.btn_connect_keithley.setChecked(False)
@@ -680,6 +662,8 @@ class MainWindow(QMainWindow):
                         pass
                     self.keithley = None
                 self._keithley_ident = ""
+                self.btn_apply_voltage.setEnabled(False)
+                self.btn_meas_once.setEnabled(False)
                 self._retranslate_ui()
                 QMessageBox.critical(self, tr("err.title_keithley"), str(exc))
         else:
@@ -690,12 +674,25 @@ class MainWindow(QMainWindow):
                     pass
                 self.keithley = None
             self._keithley_ident = ""
+            self.btn_apply_voltage.setEnabled(False)
+            self.btn_meas_once.setEnabled(False)
             self._retranslate_ui()
             self.statusBar.showMessage(tr("msg.keithley_disconnected"))
 
+    def _apply_source_voltage(self) -> None:
+        if self.keithley is None:
+            return
+        try:
+            self.keithley.set_source_voltage(self.spin_source_voltage.value())
+            self.statusBar.showMessage(
+                tr("msg.source_voltage_set").format(voltage=self.spin_source_voltage.value()), 3000
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, tr("err.title_measure"), str(exc))
+        self._show_keithley_errors()
+
     def _measure_keithley_once(self) -> None:
         if self.keithley is None:
-            QMessageBox.warning(self, tr("dlg.keithley"), tr("err.not_connected_keithley"))
             return
         try:
             count = self.spin_meas_count.value()
@@ -705,7 +702,7 @@ class MainWindow(QMainWindow):
             self.lbl_keithley_current.setText(f"{tr('lbl.current')}: {curr: .6e} A")
             self.lbl_keithley_error.setText(f"{tr('lbl.error')}: {curr_err: .6e} A")
             self.statusBar.showMessage(tr("msg.keithley_buffer").format(count=len(currents)))
-            # Draw raw samples on the left-panel plot (residuals + outliers)
+            # Draw raw samples on the samples plot (residuals + outliers)
             self._update_samples_plot(currents, curr, curr_err, list(outlier_indices))
         except Exception as exc:
             QMessageBox.critical(self, tr("err.title_measure"), str(exc))
@@ -839,8 +836,10 @@ class MainWindow(QMainWindow):
     def _stop_worker(self) -> None:
         """Stop the measurement worker thread."""
         self._measure_timer.stop()
-        # Re-enable single-shot measure once continuous acquisition stops.
-        self.btn_meas_once.setEnabled(True)
+        # Re-enable single-shot measure once continuous acquisition stops,
+        # but only if Keithley is actually connected.
+        if self.keithley is not None and self.keithley.is_connected:
+            self.btn_meas_once.setEnabled(True)
         if self._worker is not None:
             self._worker.stop()
         if self._worker_thread is not None:
@@ -897,18 +896,13 @@ class MainWindow(QMainWindow):
             self.curve_current_temp.setData([], [])
             self.curve_current_all.setData([], [])
             self.curve_current_temp_all.setData([], [])
-        # Reserved for future graph – currently empty
-        self.curve_future.setData([], [])
 
     def _update_samples_plot(self, currents, mean: float, error: float, outliers) -> None:
-        """Update the left-panel current-samples plot.
+        """Draw current samples on the samples plot.
 
         Draws vertical stem lines from zero for every residual (current − mean),
-        highlights rejected outliers as red dots on their original sample indices.
+        highlights rejected outliers in red on their original sample indices.
         """
-        if not self.plot_samples.isVisible():
-            return
-
         # Clear previous stems and outliers
         for line in self._stem_lines:
             self.plot_samples.removeItem(line)
@@ -950,6 +944,7 @@ class MainWindow(QMainWindow):
         if self.tcm is not None and self.tcm.is_connected:
             try:
                 temp = self.tcm.get_actual_temp()
+                setpoint = self.tcm.get_set_temp()
                 set_val = self.tcm.get_adjust_temp()
                 voltage = self.tcm.get_actual_voltage()
                 tcm_current = self.tcm.get_actual_current()
@@ -959,6 +954,7 @@ class MainWindow(QMainWindow):
                 else:
                     info_text = tr("lbl.info.fault")
                 self.lbl_actual_temp.setText(f"{tr('lbl.actual_temp')}: {temp:.2f} °C")  # noqa: E231
+                self.lbl_setpoint_temp.setText(f"{tr('lbl.setpoint_temp')}: {setpoint:.2f} °C")  # noqa: E231
                 self.lbl_set_temp.setText(f"{tr('lbl.set_temp')}: {set_val:.2f} °C")  # noqa: E231
                 self.lbl_actual_v.setText(f"{tr('lbl.actual_voltage')}: {voltage:.3f} V")  # noqa: E231
                 self.lbl_actual_i.setText(f"{tr('lbl.actual_current')}: {tcm_current:.3f} A")  # noqa: E231
@@ -1032,11 +1028,14 @@ class MainWindow(QMainWindow):
         self.chk_sw.setText(tr("chk.sw"))
         self.chk_oe.setText(tr("chk.oe"))
         self.btn_emergency.setText(tr("btn.emergency"))
+        self.lbl_setpoint_temp.setText(f"{tr('lbl.setpoint_temp')}: -- °C")
         self.lbl_actual_temp.setText(f"{tr('lbl.actual_temp')}: -- °C")
         self.lbl_set_temp.setText(f"{tr('lbl.set_temp')}: -- °C")
         self.lbl_actual_v.setText(f"{tr('lbl.actual_voltage')}: -- V")
         self.lbl_actual_i.setText(f"{tr('lbl.actual_current')}: -- A")
         self.lbl_info.setText(f"{tr('lbl.info')}: --")
+        self.lbl_source_voltage.setText(tr("lbl.source_voltage"))
+        self.btn_apply_voltage.setText(tr("btn.apply_voltage"))
 
         # --- Keithley 6487 ---
         self.keithley_group.setTitle(tr("keithley.group"))
@@ -1055,11 +1054,8 @@ class MainWindow(QMainWindow):
         self.btn_meas_once.setText(tr("btn.measure_once"))
         self.lbl_keithley_current.setText(f"{tr('lbl.current')}: -- A")
         self.lbl_keithley_error.setText(f"{tr('lbl.error')}: -- A")
-        self.chk_show_samples.setText(tr('chk.show_samples'))
-        self.btn_start_meas.setText(
-            tr("btn.stop_meas") if self.btn_start_meas.isChecked()
-            else tr("btn.start_meas")
-        )
+
+        self.btn_start_meas.setText(tr("btn.stop_meas") if self.btn_start_meas.isChecked() else tr("btn.start_meas"))
         self.lbl_export_name.setText(tr("label.export_name"))
         self.edit_export_name.setPlaceholderText(tr("placeholder.export_name"))
 
@@ -1088,9 +1084,9 @@ class MainWindow(QMainWindow):
         self.plot_current_temp_all.setTitle(tr("plot.current_temp_all.title"))
         self.plot_current_temp_all.setLabel("left", tr("axis.current"), "A")
         self.plot_current_temp_all.setLabel("bottom", tr("axis.temperature"), "°C")
-        self.plot_future.setTitle(tr("plot.future.title"))
-        self.plot_future.setLabel("left", "", "")
-        self.plot_future.setLabel("bottom", "", "")
+        self.plot_samples.setTitle(tr("plot.samples.title"))
+        self.plot_samples.setLabel("left", tr("axis.residuals"), "A")
+        self.plot_samples.setLabel("bottom", tr("axis.sample"), "")
 
         # --- Status bar ---
         if self.tcm is not None and self.tcm.is_connected:

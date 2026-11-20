@@ -18,10 +18,7 @@ from typing import Any
 # Ensure project root is visible for config import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import (  # noqa: E402
-    TCM_PORT,
-    KEITHLEY_VISA_ADDRESS,
-)
+from config import (TCM_PORT, KEITHLEY_VISA_ADDRESS)  # noqa: E402
 
 # Path to settings file – in core/ folder (next to this module)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
@@ -37,8 +34,9 @@ DEFAULTS: dict[str, Any] = {
     "ramp_speed": 1.0,
     "hold_time": 60,
     "meas_count": 1,
+    # Voltage at the picoammeter built-in voltage source
+    "source_voltage": 0.0,
     # UI-only options
-    "show_samples": False,
     "window_width": 1400,
     "window_height": 900,
 }
