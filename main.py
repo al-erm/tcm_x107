@@ -28,7 +28,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.wayland.textinput=false")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
-from gui.main_window import MainWindow  # noqa: E402
+from gui.window import MainWindow  # noqa: E402
 import gui.themes as themes  # noqa: E402
 
 

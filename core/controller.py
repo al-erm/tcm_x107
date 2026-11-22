@@ -9,11 +9,8 @@ import threading
 import time
 from typing import Callable, Optional
 
-try:
-    from ..instruments.tcm_x107 import TCMX107
-except ImportError:  # pragma: no cover
-    from instruments.tcm_x107 import TCMX107  # type: ignore
-
+from instruments.tcm_x107 import TCMX107  # type: ignore
+from config import SAFETY_MIN_TEMP, SAFETY_MAX_TEMP
 
 class TemperatureController:
     def __init__(self, instrument: TCMX107) -> None:
@@ -38,6 +35,11 @@ class TemperatureController:
     ) -> None:
         if self._running:
             return
+        if not (SAFETY_MIN_TEMP <= target_temp <= SAFETY_MAX_TEMP):
+            raise ValueError(
+                f"Target temperature {target_temp}°C outside safety range "
+                f"[{SAFETY_MIN_TEMP}, {SAFETY_MAX_TEMP}]"
+            )
         self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(

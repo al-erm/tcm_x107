@@ -26,20 +26,13 @@ try:
 except ImportError:  # pragma: no cover
     pyvisa = None  # type: ignore
 
-try:
-    from config import (
+from config import (
         SOURCE_CURRENT_LIMIT_10V,
         SOURCE_CURRENT_LIMIT_50V_500V,
         SOURCE_VOLTAGE_RANGE_10,
         SOURCE_VOLTAGE_RANGE_50,
         SOURCE_VOLTAGE_RANGE_500,
     )  # noqa: E402
-except ImportError:  # pragma: no cover
-    SOURCE_VOLTAGE_RANGE_10 = 10.0
-    SOURCE_VOLTAGE_RANGE_50 = 50.0
-    SOURCE_VOLTAGE_RANGE_500 = 500.0
-    SOURCE_CURRENT_LIMIT_10V = 0.025
-    SOURCE_CURRENT_LIMIT_50V_500V = 0.0025
 
 
 class Keithley6487Error(Exception):
@@ -74,7 +67,7 @@ class Keithley6487:
             self._inst.write_termination = "\n"
             self._inst.write("*CLS")
             self._check_errors()
-            idn = self.identity
+            idn = self.identity()
             self._check_errors()
             if not idn:
                 raise Keithley6487Error("Keithley did not answer *IDN?")
@@ -87,20 +80,27 @@ class Keithley6487:
             raise Keithley6487Error(f"Failed to connect to Keithley 6487 ({self.visa_address}): {exc}") from exc
 
     def disconnect(self) -> None:
-        self.zero_check(True)
+        # Always close the VISA session, even if connect() failed partway.
+        # Order matters: 0 V → output OFF → ZCH ON → GTL → close.
+        # Each step is independent – none of them may abort the rest.
         if self._inst is not None:
             try:
-                # Turn the voltage source output off before closing the session.
-                try:
-                    self.set_source_output(False)
-                except Exception:
-                    pass
-                # Go To Local: switch instrument to local mode before closing the GPIB session,
-                # so the REMOTE/Talk indicator goes off right after disconnect.
-                try:
-                    self._inst.control_ren(6)  # GTL (Go To Local)
-                except Exception:
-                    pass
+                self.set_source_voltage_only(0.0)
+            except Exception:
+                pass
+            try:
+                self.set_source_output(False)
+            except Exception:
+                pass
+            try:
+                self.zero_check(True)
+            except Exception:
+                pass
+            try:
+                self._inst.control_ren(6)  # GTL (Go To Local)
+            except Exception:
+                pass
+            try:
                 self._inst.close()
             except Exception:
                 pass
@@ -151,7 +151,7 @@ class Keithley6487:
         """
         if count < 1:
             raise Keithley6487Error("Buffer count must be >= 1")
-        self.write(':DAMP 1')
+        self.write(':DAMP 1')  # Enable analog filter damping
         self.set_nplc(nplc)
         self.write(':TRIG:DEL 0')
         self.auto_range(True)
@@ -184,7 +184,7 @@ class Keithley6487:
     def measure_current_single(self) -> float:
         """Measure current once without touching the buffer."""
         self.clear_errors()
-        raw = self.query(":FORM:ELEM READ;DATA ASC;:MEAS?")
+        raw = self.query(":FORM:ELEM READ;DATA ASC;:MEAS?")  # todo replace with :READ?
         errs = self._check_errors()
         if errs:
             detail = "; ".join(errs)
@@ -253,6 +253,11 @@ class Keithley6487:
         """
         value = float(value)
         abs_v = abs(value)
+        if abs_v > SOURCE_VOLTAGE_RANGE_500:
+            raise Keithley6487Error(
+                f"Source voltage {value} V exceeds Keithley 6487 limit "
+                f"±{SOURCE_VOLTAGE_RANGE_500} V"
+            )
         if abs_v <= SOURCE_VOLTAGE_RANGE_10:
             self.set_source_voltage_range(SOURCE_VOLTAGE_RANGE_10)
             self.set_source_current_limit(SOURCE_CURRENT_LIMIT_10V)
@@ -270,7 +275,7 @@ class Keithley6487:
 
         Used during a smooth ramp where the range was already selected beforehand.
         """
-        text = f"{float(value):.6f}".replace(",", ".")
+        text = f"{float(value):.6f}"
         self.write(f":SOUR:VOLT {text}")
         self._check_errors()
 

@@ -9,7 +9,6 @@ TCM_PORT = os.environ.get("TCM_PORT", "COM10")   # replace with your port
 TCM_BAUDRATE = int(os.environ.get("TCM_BAUDRATE", "57600"))
 TCM_TIMEOUT = float(os.environ.get("TCM_TIMEOUT", "1.0"))
 TCM_WRITE_TIMEOUT = float(os.environ.get("TCM_WRITE_TIMEOUT", "1.0"))
-TCM_CMD_TERMINATOR = "@0"
 
 # --- Keithley 6487 (GPIB via NI-VISA) ---
 KEITHLEY_VISA_ADDRESS = os.environ.get("KEITHLEY_VISA_ADDRESS", "GPIB0::22::INSTR")
@@ -30,8 +29,8 @@ SOURCE_RAMP_DEFAULT_TIME = float(os.environ.get("SOURCE_RAMP_DEFAULT_TIME", "10.
 SOURCE_RAMP_DEFAULT_STEPS = int(os.environ.get("SOURCE_RAMP_DEFAULT_STEPS", "10"))
 
 # --- Safety limits (temperature in °C) ---
-SAFETY_MIN_TEMP = float(os.environ.get("SAFETY_MIN_TEMP", "0.0"))
-SAFETY_MAX_TEMP = float(os.environ.get("SAFETY_MAX_TEMP", "100.0"))
+SAFETY_MIN_TEMP = float(os.environ.get("SAFETY_MIN_TEMP", "-50.0"))
+SAFETY_MAX_TEMP = float(os.environ.get("SAFETY_MAX_TEMP", "150.0"))
 
 # --- Data export ---
 EXPORT_DELIMITER = "\t"

@@ -13,10 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
-try:
-    from .. import config  # type: ignore
-except ImportError:  # pragma: no cover
-    import config  # type: ignore
+from config import EXPORT_DELIMITER, EXPORT_ENCODING, EXPORT_FILENAME, EXPORT_DIR, EXPORT_AUTO_CREATE_DIR
 
 
 @dataclass
@@ -39,13 +36,12 @@ class DataManager:
 
     def _resolve_path(self, filename: Optional[str] = None) -> str:
         """Return full path to file in data folder with .txt extension."""
-        base_name = filename or config.EXPORT_FILENAME
+        base_name = filename or EXPORT_FILENAME
         if not base_name.lower().endswith(".txt"):
             base_name += ".txt"
-        export_dir = config.EXPORT_DIR
-        if config.EXPORT_AUTO_CREATE_DIR and not os.path.isdir(export_dir):
-            os.makedirs(export_dir, exist_ok=True)
-        return os.path.join(export_dir, base_name)
+        if EXPORT_AUTO_CREATE_DIR and not os.path.isdir(EXPORT_DIR):
+            os.makedirs(EXPORT_DIR, exist_ok=True)
+        return os.path.join(EXPORT_DIR, base_name)
 
     @staticmethod
     def get_available_filename(directory: str, base_name: str) -> str:
@@ -68,7 +64,7 @@ class DataManager:
         # do not strip the trailing date number.
         # Instead, append _1, _2 ... after the full date:
         # measurement_YYYY_MM_DD -> measurement_YYYY_MM_DD_1 -> _2 ...
-        if name.startswith(config.EXPORT_FILENAME + "_"):
+        if name.startswith(EXPORT_FILENAME + "_"):
             base = name
         else:
             base = re.sub(r"_\d+$", "", name)
@@ -112,11 +108,41 @@ class DataManager:
 
         The file is assumed to already contain a header; new points are
         appended to the end. Internal point list is reset for the graph.
+        Timestamps continue from the last recorded value in the file so the
+        time column stays monotonic.
         """
         self.points.clear()
-        self._start_time = time.time()
         self._filename = self._resolve_path(filename)
         self._header_written = True
+
+        # Continue the time axis from the last value already written to the
+        # file, otherwise log_point() would restart at 0 and produce a
+        # non-monotonic time column.
+        last_time_s = self._last_recorded_time_seconds(self._filename)
+        self._start_time = time.time() - last_time_s
+
+    @staticmethod
+    def _last_recorded_time_seconds(path: str) -> float:
+        """Return the last time value (seconds) from an existing export file,
+        or 0.0 if the file is missing, empty, or unreadable."""
+        if not os.path.exists(path):
+            return 0.0
+        try:
+            with open(path, "r", encoding=EXPORT_ENCODING, newline="") as f:
+                lines = f.readlines()
+        except OSError:
+            return 0.0
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(EXPORT_DELIMITER)
+            try:
+                t_min = float(parts[0])
+                return t_min * 60.0
+            except (ValueError, IndexError):
+                continue
+        return 0.0
 
     def log_point(
         self,
@@ -140,8 +166,8 @@ class DataManager:
         self.points.append(point)
 
         mode = "a" if self._header_written else "w"
-        with open(self._filename, mode, encoding="utf-8", newline="") as f:
-            writer = csv.writer(f, delimiter="\t")
+        with open(self._filename, mode, encoding=EXPORT_ENCODING, newline="") as f:
+            writer = csv.writer(f, delimiter=EXPORT_DELIMITER)
             if not self._header_written:
                 # Line 1: date and time of file creation
                 creation_str = datetime.fromtimestamp(self._creation_time).strftime("%Y-%m-%d %H:%M:%S")

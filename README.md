@@ -106,7 +106,7 @@ tcm_x107/
 │   └── settings.json       # User settings (created on first save)
 │
 ├── gui/                    # Interface (single window)
-│   ├── main_window.py      # Main window: controls on the left, graphs on the right
+│   ├── window.py           # Main window: controls on the left, graphs on the right
 │   ├── i18n.py             # Internationalization (en / ru)
 │   └── themes.py           # Themes: system / light / dark
 │

@@ -14,14 +14,15 @@ import numpy as np
 # Ensure project root is visible for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6.QtCore import QTimer, QObject, QThread, pyqtSignal, pyqtSlot  # noqa: E402
+from PyQt6.QtCore import QTimer, QObject, QThread, pyqtSignal, pyqtSlot, Qt  # noqa: E402
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QSplitter, QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox,
     QSpinBox, QCheckBox, QMessageBox, QDialog, QStatusBar, QTabWidget, QComboBox,
     QProgressBar,
 )  # noqa: E402
-from PyQt6.QtGui import QFont, QFontMetrics  # noqa: E402
+from PyQt6.QtGui import QCloseEvent, QFont, QFontMetrics  # noqa: E402
 
 import pyqtgraph as pg  # noqa: E402
 import gui.i18n as i18n  # noqa: E402
@@ -31,7 +32,8 @@ from config import (
     KEITHLEY_VISA_ADDRESS, KEITHLEY_TIMEOUT_MS,
     SAFETY_MIN_TEMP, SAFETY_MAX_TEMP, UPDATE_INTERVAL_MS, PLOT_MAX_POINTS,
     TEMP_STATUS_THRESHOLD, EXPORT_FILENAME, EXPORT_DIR,
-    SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS
+    SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS,
+    SOURCE_VOLTAGE_RANGE_500
 )  # noqa: E402
 
 from instruments.tcm_x107 import TCMX107, TCMX107Error  # noqa: E402
@@ -52,7 +54,7 @@ class MeasurementWorker(QObject):
     measure_requested = pyqtSignal()
 
     def __init__(self, tcm: TCMX107, keithley: Keithley6487,
-                 data_manager: DataManager, parent=None) -> None:
+                 data_manager: DataManager, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.tcm = tcm
         self.keithley = keithley
@@ -217,8 +219,7 @@ class VoltageRampDialog(QDialog):
 
     rejected_signal = pyqtSignal()
 
-    def __init__(self, keithley: Keithley6487, target_v: float,
-                 parent: "MainWindow" | None = None) -> None:
+    def __init__(self, keithley: Keithley6487, target_v: float, parent: MainWindow | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("dlg.ramp_title"))
         self.setModal(True)
@@ -309,6 +310,7 @@ class VoltageRampDialog(QDialog):
         self._started = True
 
     def _stop_ramp(self) -> None:
+        """Stops the voltage increase at the current value and leaves the voltage switched on."""
         if self._worker is not None:
             self._worker.stop()
         self.btn_start.setEnabled(False)
@@ -358,6 +360,10 @@ class VoltageRampDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    # Signal for thread-safe profile updates from the worker thread (TemperatureController)
+    # Emitted from the worker thread, handled in the GUI thread via QueuedConnection.
+    _profile_signal = pyqtSignal(float, float, float)
+
     def __init__(self) -> None:
         super().__init__()
         self.resize(1400, 900)
@@ -374,6 +380,9 @@ class MainWindow(QMainWindow):
         self._worker_thread = None
         self._gui_timer = None
         self._measure_timer = None
+        self._profile_signal.connect(
+            self._on_profile_update, Qt.ConnectionType.QueuedConnection
+        )
         # Stem lines / outlier highlights for the current-samples plot (drawn on plot_samples)
         self._stem_lines: list = []
         self._scatter_items: list = []
@@ -457,7 +466,7 @@ class MainWindow(QMainWindow):
         self.lbl_target_temp = QLabel()
         tgt_layout.addWidget(self.lbl_target_temp)
         self.spin_target_temp = QDoubleSpinBox()
-        self.spin_target_temp.setRange(-50, 200)
+        self.spin_target_temp.setRange(SAFETY_MIN_TEMP, SAFETY_MAX_TEMP)
         self.spin_target_temp.setValue(25.0)
         self.spin_target_temp.setDecimals(2)
         tgt_layout.addWidget(self.spin_target_temp)
@@ -553,8 +562,8 @@ class MainWindow(QMainWindow):
         self.lbl_source_voltage = QLabel()
         source_voltage_layout.addWidget(self.lbl_source_voltage)
         self.spin_source_voltage = QDoubleSpinBox()
-        self.spin_source_voltage.setRange(-1000.0, 1000.0)
-        self.spin_source_voltage.setDecimals(3)
+        self.spin_source_voltage.setRange(-SOURCE_VOLTAGE_RANGE_500, SOURCE_VOLTAGE_RANGE_500)
+        self.spin_source_voltage.setDecimals(1)
         self.spin_source_voltage.setSingleStep(0.1)
         self.spin_source_voltage.setValue(float(self.settings.get("source_voltage", 0.0)))
         self.spin_source_voltage.valueChanged.connect(lambda v: self.settings.set("source_voltage", float(v)))
@@ -573,9 +582,7 @@ class MainWindow(QMainWindow):
         # Smooth ramp checkbox (stored in settings, default OFF).
         self.chk_source_ramp = QCheckBox()
         self.chk_source_ramp.setChecked(bool(self.settings.get("source_ramp", False)))
-        self.chk_source_ramp.stateChanged.connect(
-            lambda s: self.settings.set("source_ramp", bool(s))
-        )
+        self.chk_source_ramp.stateChanged.connect(lambda s: self.settings.set("source_ramp", bool(s)))
         source_output_layout.addWidget(self.chk_source_ramp)
         source_output_layout.addStretch()
         keithley_layout.addLayout(source_output_layout)
@@ -772,7 +779,9 @@ class MainWindow(QMainWindow):
                 self._retranslate_ui()
                 self.statusBar.showMessage(tr("msg.tcm_connected").format(port=self.edit_port.text()))
                 self.controller = TemperatureController(self.tcm)
-                self.controller.set_update_callback(self._on_profile_update)
+                self.controller.set_update_callback(
+                    lambda actual, set_val, ts: self._profile_signal.emit(actual, set_val, ts)
+                )
                 # Software-based checkbox synchronized with the device's actual state
                 try:
                     self.chk_sw.blockSignals(True)
@@ -836,6 +845,10 @@ class MainWindow(QMainWindow):
         if self.controller is None or self.tcm is None:
             return
         target = self.spin_target_temp.value()
+        if not (SAFETY_MIN_TEMP <= target <= SAFETY_MAX_TEMP):
+            QMessageBox.warning(self, tr("err.title_safety"),
+                                tr("err.temp_range").format(min=SAFETY_MIN_TEMP, max=SAFETY_MAX_TEMP))
+            return
         hold = self.spin_hold.value()
         ramp = self.spin_ramp.value()
         self.controller.start_profile(target_temp=target, hold_time_s=hold, ramp_speed=ramp)
@@ -873,6 +886,13 @@ class MainWindow(QMainWindow):
         self.tcm.set_oe(1 if state else 0)
 
     def _emergency_stop(self) -> None:
+        keithley_off = True
+        if self.keithley is not None and self.keithley.is_connected:
+            try:
+                self.keithley.set_source_output(False)
+                self.chk_source_output.setChecked(False)
+            except Exception:
+                keithley_off = False
         if self.tcm is not None:
             self.tcm.emergency_stop()
         if self.controller is not None:
@@ -882,7 +902,12 @@ class MainWindow(QMainWindow):
         self.chk_sw.setChecked(False)
         self.chk_oe.setChecked(False)
         self.statusBar.showMessage(tr("msg.emergency_stop"))
-        QMessageBox.warning(self, tr("dlg.emergency_title"), tr("dlg.emergency_text"))
+        if keithley_off:
+            QMessageBox.warning(self, tr("dlg.emergency_title"), tr("dlg.emergency_text"))
+        else:
+            QMessageBox.critical(self, tr("dlg.emergency_title"),
+                                 tr("dlg.emergency_text") + "\n" +
+                                 tr("err.keithley_not_disabled"))
 
     def _toggle_keithley_connection(self) -> None:
         if self.btn_connect_keithley.isChecked():
@@ -946,14 +971,20 @@ class MainWindow(QMainWindow):
             # The source output is enabled separately with the checkbox below
             # (:SOUR:VOLT:STAT). This button only sets the voltage level.
             self.keithley.set_source_voltage(self.spin_source_voltage.value())
-            self.statusBar.showMessage(
-                tr("msg.source_voltage_set").format(voltage=self.spin_source_voltage.value()), 3000
-            )
         except Exception as exc:
             QMessageBox.critical(self, tr("err.title_measure"), str(exc))
+            self._show_keithley_errors()
+            return
         self._show_keithley_errors()
+        if self.keithley.last_errors:
+            QMessageBox.warning(
+                self, tr("err.title_measure"),
+                "\n".join(self.keithley.last_errors)
+            )
+            return
+        self.statusBar.showMessage(tr("msg.source_voltage_set").format(voltage=self.spin_source_voltage.value()), 3000)
 
-    def _toggle_source_output(self, state) -> None:
+    def _toggle_source_output(self, state: bool) -> None:
         """Enable/disable the Keithley 6487 voltage source output (:SOUR:VOLT:STAT).
 
         When turning ON with the smooth-ramp checkbox checked, ramp the voltage
@@ -1368,7 +1399,7 @@ class MainWindow(QMainWindow):
         self.plot_current_temp.setTitle(tr("plot.current_temp.title"))
         self.plot_current_temp.setLabel("left", tr("axis.current"), "A")
         self.plot_current_temp.setLabel("bottom", tr("axis.temperature"), "°C")
-        self.tabs.setTabText(0, tr("tab.t_vs_t"))
+        self.tabs.setTabText(0, tr("tab.T_vs_t"))
         self.tabs.setTabText(1, tr("tab.i_vs_t"))
         self.tabs.setTabText(2, tr("tab.i_vs_T"))
         self.tabs.setTabText(3, tr("tab.all"))
@@ -1406,7 +1437,7 @@ class MainWindow(QMainWindow):
             self._retranslate_ui()
             self.statusBar.showMessage(tr("status.settings_saved"))
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         # Save window size and all settings before exit
         self.settings.set("window_width", self.width(), autosave=False)
         self.settings.set("window_height", self.height(), autosave=False)

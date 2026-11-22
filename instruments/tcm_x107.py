@@ -16,14 +16,16 @@ from typing import Optional
 
 import serial
 
+from config import TCM_PORT, TCM_BAUDRATE, TCM_TIMEOUT, TCM_WRITE_TIMEOUT
+
 
 class TCMX107Error(Exception):
     pass
 
 
 class TCMX107:
-    def __init__(self, port: str = "COM10", baudrate: int = 57600,
-                 timeout: float = 1.0, write_timeout: float = 1.0) -> None:
+    def __init__(self, port: str = TCM_PORT, baudrate: int = TCM_BAUDRATE,
+                 timeout: float = TCM_TIMEOUT, write_timeout: float = TCM_WRITE_TIMEOUT) -> None:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -130,8 +132,8 @@ class TCMX107:
         return float(raw)
 
     def set_ramp_speed(self, value: float) -> None:
-        text = f"{value:.6f}".replace(",", ".")  # noqa: E231
-        self.set(f"TC1:TCRAMPSPEED={text}")  # noqa: E231
+        text = f"{value:.6f}"
+        self.set(f"TC1:TCRAMPSPEED={text}")
 
     # --- Temperature limits --------------------------------------------- #
     def get_max_set_temp(self) -> float:
@@ -156,16 +158,16 @@ class TCMX107:
         return float(raw)
 
     def set_max_v(self, value: float) -> None:
-        text = f"{value:.3f}".replace(",", ".")  # noqa: E231
-        self.set(f"TC1:TCMAXV={text}")  # noqa: E231
+        text = f"{value:.3f}"
+        self.set(f"TC1:TCMAXV={text}")
 
     def get_cool_v_ratio(self) -> float:
         raw = self.query("TC1:TCCOOLVRATIO?")
         return float(raw)
 
     def set_cool_v_ratio(self, value: float) -> None:
-        text = f"{value:.2f}".replace(",", ".")  # noqa: E231
-        self.set(f"TC1:TCCOOLVRATIO={text}")  # noqa: E231
+        text = f"{value:.2f}"
+        self.set(f"TC1:TCCOOLVRATIO={text}")
 
     def get_mode(self) -> int:
         raw = self.query("TC1:TCMODE?")
@@ -223,10 +225,3 @@ class TCMX107:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.disconnect()
-
-
-# Import config at the end to avoid circular imports
-try:
-    from .. import config  # type: ignore
-except ImportError:  # pragma: no cover
-    import config  # type: ignore

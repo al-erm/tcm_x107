@@ -83,6 +83,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lbl.ramp_progress": "Progress:",
         "lbl.ramp_voltage": "Voltage:",
         "lbl.ramp_current": "Current:",
+        "err.keithley_not_disabled": "Keithley source output could not be disabled!",
 
         # --- Plots ------------------------------------------------------
         "plot.temp_time.title": "Temperature vs Time",
@@ -94,7 +95,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "axis.time_unit": "s",
         "axis.residuals": "I − ⟨I⟩",
         "axis.sample": "Sample",
-        "tab.t_vs_t": "T vs t",
+        "tab.T_vs_t": "T vs t",
         "tab.i_vs_t": "I vs t",
         "tab.i_vs_T": "I vs T",
         "tab.all": "All",
@@ -168,7 +169,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lbl.actual_voltage": "Тек. U",
         "lbl.actual_current": "Тек. I",
         "lbl.info": "Статус",
-        "lbl.info.no_fault": "Все работает",
+        "lbl.info.no_fault": "Ошибок нет",
         "lbl.info.fault": "Ошибка",
 
         # --- Keithley 6487 ----------------------------------------------
@@ -201,24 +202,25 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "lbl.ramp_progress": "Прогресс:",
         "lbl.ramp_voltage": "Напряжение:",
         "lbl.ramp_current": "Ток:",
+        "err.keithley_not_disabled": "Не удалось отключить выход источника Keithley!",
 
         # --- Plots ------------------------------------------------------
         "plot.temp_time.title": "Температура vs Время",
         "plot.current_time.title": "Ток vs Время",
-        "plot.current_temp.title": "Ток vs Температуру",
+        "plot.current_temp.title": "Ток vs Температура",
         "axis.temperature": "Температура",
         "axis.time": "Время",
         "axis.current": "Ток",
         "axis.time_unit": "с",
         "axis.residuals": "I − ⟨I⟩",
         "axis.sample": "Выборка",
-        "tab.t_vs_t": "T vs t",
+        "tab.T_vs_t": "T vs t",
         "tab.i_vs_t": "I vs t",
         "tab.i_vs_T": "I vs T",
         "tab.all": "Все",
         "plot.temp_all.title": "Температура vs Время",
         "plot.current_time_all.title": "Ток vs Время",
-        "plot.current_temp_all.title": "Ток vs Температуру",
+        "plot.current_temp_all.title": "Ток vs Температура",
         "plot.samples.title": "Пробы тока",
 
         # --- Messages / dialogs -----------------------------------------

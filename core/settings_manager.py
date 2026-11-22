@@ -18,14 +18,16 @@ from typing import Any
 # Ensure project root is visible for config import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import (TCM_PORT, KEITHLEY_VISA_ADDRESS)  # noqa: E402
+from config import TCM_PORT, KEITHLEY_VISA_ADDRESS, SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS
+
+from gui.i18n import DEFAULT_LANGUAGE
 
 # Path to settings file – in core/ folder (next to this module)
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 # Default values: priority – config.py, then local defaults
 DEFAULTS: dict[str, Any] = {
-    "language": "en",
+    "language": DEFAULT_LANGUAGE,
     "theme": "system",
     "tcm_port": TCM_PORT,
     "keithley_visa_address": KEITHLEY_VISA_ADDRESS,
@@ -38,8 +40,8 @@ DEFAULTS: dict[str, Any] = {
     "source_voltage": 0.0,
     # Smooth voltage ramp settings (Keithley 6487 source)
     "source_ramp": False,
-    "source_ramp_time": 10.0,
-    "source_ramp_steps": 10,
+    "source_ramp_time": SOURCE_RAMP_DEFAULT_TIME,
+    "source_ramp_steps": SOURCE_RAMP_DEFAULT_STEPS,
     # UI-only options
     "window_width": 1400,
     "window_height": 900,
@@ -69,7 +71,7 @@ class SettingsManager:
                     for key in DEFAULTS:
                         if key in data:
                             self._settings[key] = data[key]
-            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            except (ValueError, OSError):
                 # File is corrupt – use default values
                 pass
 
