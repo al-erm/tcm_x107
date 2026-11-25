@@ -9,7 +9,7 @@ from typing import List, Tuple
 from scipy.stats import siegelslopes, t
 
 P = 0.95  # confidence probability
-BOOTSTRAP_REPLICATES = 1000  # bootstrap replicates for post-selection-aware CI
+BOOTSTRAP_REPLICATES = 200  # bootstrap replicates for the CI (kept low for speed)
 
 
 def robust_average_current(currents: List[float], threshold: float = 3.0) -> Tuple[float, float, np.ndarray]:
@@ -109,15 +109,15 @@ def _bootstrap_mean_level(x: np.ndarray, y: np.ndarray,
                           n_replicates: int = BOOTSTRAP_REPLICATES,
                           seed: int | None = None) -> Tuple[float, float]:
     """
-    Bootstrap percentile confidence interval for the mean level of a Siegel line.
+    Bootstrap percentile confidence interval for the mean level of a line.
 
-    Resamples (x, y) pairs with replacement, fits Siegel slopes on each replicate,
-    evaluates the fitted line at mean(x), and returns the bootstrap center and
-    half-width of the percentile interval at level P.
+    Resamples (x, y) pairs with replacement, fits an ordinary least-squares
+    line on each replicate, evaluates it at mean(x), and returns the bootstrap
+    center and half-width of the percentile interval at level P.
 
-    Re-running the same selection-then-estimation pipeline on each bootstrap
-    sample approximately accounts for the optimism introduced by prior
-    outlier removal (post-selection bias).
+    The point estimate itself stays the robust Siegel fit computed by the
+    caller; the bootstrap only quantifies sampling variability, so the faster
+    OLS fit is used inside the replicates.
     """
     rng = np.random.default_rng(seed)
     n = x.size
@@ -128,7 +128,7 @@ def _bootstrap_mean_level(x: np.ndarray, y: np.ndarray,
         x_boot = x[idx]
         y_boot = y[idx]
         try:
-            slope_b, intercept_b = siegelslopes(y_boot, x_boot, method='separate')
+            slope_b, intercept_b = np.polyfit(x_boot, y_boot, 1)
             estimates[b] = slope_b * x_mean + intercept_b
         except Exception:
             estimates[b] = np.nan

@@ -88,14 +88,17 @@ class Keithley6487:
                 self.set_source_voltage_only(0.0)
             except Exception:
                 pass
+            time.sleep(0.1)
             try:
                 self.set_source_output(False)
             except Exception:
                 pass
+            time.sleep(0.1)
             try:
                 self.zero_check(True)
             except Exception:
                 pass
+            time.sleep(0.1)
             try:
                 self._inst.control_ren(6)  # GTL (Go To Local)
             except Exception:
@@ -167,6 +170,9 @@ class Keithley6487:
     def read_buffer(self) -> list[float]:
         """Acquire the configured buffer and return [current_A]"""
         self.clear_errors()
+        self.write(":TRAC:FEED:CONT NEV")  # clear the "storage active" lock
+        self.write(":TRAC:CLE")  # clear buffer
+        self.write(":TRAC:FEED:CONT NEXT")  # allow writing until the POIN is filled
         self.write(":INIT")
         self.query("*OPC?")
         raw = self.query(":TRAC:DATA?")
@@ -182,9 +188,9 @@ class Keithley6487:
         return points
 
     def measure_current_single(self) -> float:
-        """Measure current once without touching the buffer."""
+        """Measure current once."""
         self.clear_errors()
-        raw = self.query(":FORM:ELEM READ;DATA ASC;:MEAS?")  # todo replace with :READ?
+        raw = self.query(":READ?")
         errs = self._check_errors()
         if errs:
             detail = "; ".join(errs)

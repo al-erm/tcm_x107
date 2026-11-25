@@ -62,6 +62,7 @@ class MeasurementWorker(QObject):
         self._running = False
         self._measure_interval = 0.5
         self._buffer_count = 1
+        self._current_count = 1
 
     def start(self) -> None:
         self._running = True
@@ -75,6 +76,11 @@ class MeasurementWorker(QObject):
     def set_buffer_count(self, count: int) -> None:
         """Number of points to acquire in one Keithley buffer."""
         self._buffer_count = max(1, count)
+        self.keithley.configure_buffer(self._buffer_count)
+
+    def set_current_count(self, count: int):
+        """Tracks the current number of points in the buffer"""
+        self._current_count = count
 
     @pyqtSlot()
     def do_measurement(self) -> None:
@@ -110,9 +116,11 @@ class MeasurementWorker(QObject):
             temp = self.tcm.get_actual_temp()
 
             if self.keithley is not None and self.keithley.is_connected:
-                self.keithley.configure_buffer(self._buffer_count)
                 currents = self.keithley.read_buffer()
                 curr, curr_err, outlier_indices = robust_average_current(currents)
+                # Comparing buffer size and value with UI
+                if self._current_count != self._buffer_count:
+                    self.keithley.configure_buffer(self._current_count)
             else:
                 curr, curr_err = 0.0, 0.0
                 currents = []
@@ -163,6 +171,8 @@ class RampWorker(QObject):
             # Setting the source voltage to zero and switching it on.
             self.keithley.set_source_voltage_only(current_v)
             self.keithley.set_source_output(True)
+            count = self.keithley.get_buffer_count()
+            self.keithley.configure_buffer(1)
             for i in range(self.steps):
                 if self._stop_requested:
                     break
@@ -189,7 +199,7 @@ class RampWorker(QObject):
                     time.sleep(0.05)
                 if self._stop_requested:
                     break
-                # Measure current once using :READ? (does not touch the buffer).
+                # Measure current once using :READ? (buffer = 1).
                 try:
                     cur = self.keithley.measure_current_single()
                 except Exception:
@@ -202,6 +212,7 @@ class RampWorker(QObject):
                         break
                     time.sleep(0.05)
                 self.progress.emit(int((i + 1) / self.steps * 100))
+            self.keithley.configure_buffer(count)
         except Exception as exc:
             self.error.emit(str(exc))
             return
@@ -995,7 +1006,6 @@ class MainWindow(QMainWindow):
         try:
             if bool(state):
                 if self.chk_source_ramp.isChecked():
-                    # Smooth ramp from 0 to the set voltage.
                     dlg = VoltageRampDialog(self.keithley, self.spin_source_voltage.value(), self)
                     dlg.rejected.connect(self._on_ramp_dialog_rejected)
                     dlg.exec()
@@ -1018,8 +1028,7 @@ class MainWindow(QMainWindow):
         if self.keithley is None:
             return
         try:
-            count = self.spin_meas_count.value()
-            self.keithley.configure_buffer(count)
+            self.keithley.configure_buffer(self.spin_meas_count.value())
             currents = self.keithley.read_buffer()
             curr, curr_err, outlier_indices = robust_average_current(currents)
             self.lbl_keithley_current.setText(f"{tr('lbl.current')}: {curr: .6e} A")
@@ -1136,7 +1145,16 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             return
         self._worker = MeasurementWorker(self.tcm, self.keithley, self.data_manager)
-        self._worker.set_buffer_count(self.spin_meas_count.value())
+        if self.keithley is not None and self.keithley.is_connected:
+            # Set identical values
+            self._worker.set_buffer_count(self.spin_meas_count.value())
+            self._worker.set_current_count(self.spin_meas_count.value())
+            # Binding the current UI value to _worker.set_current_count safely
+            # across threads using a queue via QueuedConnection
+            self.spin_meas_count.valueChanged.connect(
+                self._worker.set_current_count,
+                Qt.ConnectionType.QueuedConnection
+            )
 
         # QThread already runs an event loop, so queued signals to the worker
         # are delivered across threads without a custom QThread subclass.
@@ -1168,6 +1186,7 @@ class MainWindow(QMainWindow):
             self.btn_meas_once.setEnabled(True)
             self.btn_apply_voltage.setEnabled(True)
             self.chk_source_output.setEnabled(True)
+            self.spin_meas_count.valueChanged.disconnect(self._worker.set_current_count)
         if self._worker is not None:
             self._worker.stop()
         if self._worker_thread is not None:
