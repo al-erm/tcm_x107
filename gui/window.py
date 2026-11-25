@@ -170,9 +170,9 @@ class RampWorker(QObject):
             current_v = 0.0
             # Setting the source voltage to zero and switching it on.
             self.keithley.set_source_voltage_only(current_v)
+            time.sleep(0.1)
             self.keithley.set_source_output(True)
-            count = self.keithley.get_buffer_count()
-            self.keithley.configure_buffer(1)
+            time.sleep(0.1)
             for i in range(self.steps):
                 if self._stop_requested:
                     break
@@ -212,7 +212,6 @@ class RampWorker(QObject):
                         break
                     time.sleep(0.05)
                 self.progress.emit(int((i + 1) / self.steps * 100))
-            self.keithley.configure_buffer(count)
         except Exception as exc:
             self.error.emit(str(exc))
             return
@@ -1144,6 +1143,9 @@ class MainWindow(QMainWindow):
         """Create and start the measurement worker in a background thread."""
         if self._worker is not None:
             return
+        # Pass the already connected instrument to DataManager before starting
+        self.data_manager.keithley = self.keithley
+
         self._worker = MeasurementWorker(self.tcm, self.keithley, self.data_manager)
         if self.keithley is not None and self.keithley.is_connected:
             # Set identical values
@@ -1179,6 +1181,8 @@ class MainWindow(QMainWindow):
 
     def _stop_worker(self) -> None:
         """Stop the measurement worker thread."""
+        if self._worker is None:
+            return
         self._measure_timer.stop()
         # Re-enable single-shot measure once continuous acquisition stops,
         # but only if Keithley is actually connected.
@@ -1186,7 +1190,10 @@ class MainWindow(QMainWindow):
             self.btn_meas_once.setEnabled(True)
             self.btn_apply_voltage.setEnabled(True)
             self.chk_source_output.setEnabled(True)
-            self.spin_meas_count.valueChanged.disconnect(self._worker.set_current_count)
+            try:
+                self.spin_meas_count.valueChanged.disconnect(self._worker.set_current_count)
+            except (TypeError, RuntimeError):
+                pass
         if self._worker is not None:
             self._worker.stop()
         if self._worker_thread is not None:

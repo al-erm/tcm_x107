@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
-from config import EXPORT_DELIMITER, EXPORT_ENCODING, EXPORT_FILENAME, EXPORT_DIR, EXPORT_AUTO_CREATE_DIR
+from instruments.keithley_6487 import Keithley6487
+
+from config import (EXPORT_DELIMITER, EXPORT_ENCODING, EXPORT_FILENAME, EXPORT_DIR, EXPORT_AUTO_CREATE_DIR, 
+                    KEITHLEY_AUTOZERO_TIME)
 
 
 @dataclass
@@ -26,13 +29,15 @@ class MeasurementPoint:
 
 
 class DataManager:
-    def __init__(self) -> None:
+    def __init__(self, keithley: Keithley6487 | None = None) -> None:
+        self.keithley = keithley
         self.points: List[MeasurementPoint] = []
         self._start_time: Optional[float] = None
         self._filename: Optional[str] = None
         self._header_written = False
         self._creation_time: Optional[float] = None
         self._keithley_voltage: str = ""
+        self._keithley_az_time: Optional[float] = None
 
     def _resolve_path(self, filename: Optional[str] = None) -> str:
         """Return full path to file in data folder with .txt extension."""
@@ -90,6 +95,7 @@ class DataManager:
         """
         self.points.clear()
         self._start_time = time.time()
+        self._keithley_az_time = time.time()
         self._filename = self._resolve_path(filename)
 
         # Safety: never silently truncate an existing file.
@@ -155,7 +161,8 @@ class DataManager:
         if self._start_time is None:
             self.start_session()
 
-        timestamp = time.time() - self._start_time
+        current_time = time.time()
+        timestamp = current_time - self._start_time
         point = MeasurementPoint(
             timestamp=timestamp,
             temperature=temperature,
@@ -196,6 +203,12 @@ class DataManager:
                     f"{status}",
                 ]
             )
+
+        # Autozero
+        if current_time - self._keithley_az_time >= KEITHLEY_AUTOZERO_TIME * 60:
+            if self.keithley is not None and self.keithley.is_connected:
+                self.keithley.auto_zero()
+            self._keithley_az_time: float = current_time
 
     def end_session(self) -> None:
         """End the series (file is already closed, nothing more needed)."""

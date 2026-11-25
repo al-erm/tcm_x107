@@ -73,8 +73,8 @@ class Keithley6487:
                 raise Keithley6487Error("Keithley did not answer *IDN?")
             self._connected = True
             self.reset()
-            time.sleep(1.0)
-            self.zero_check(False)
+            time.sleep(0.5)
+            self.perform_initial_zero_correction()
         except Exception as exc:
             self.disconnect()
             raise Keithley6487Error(f"Failed to connect to Keithley 6487 ({self.visa_address}): {exc}") from exc
@@ -190,8 +190,11 @@ class Keithley6487:
     def measure_current_single(self) -> float:
         """Measure current once."""
         self.clear_errors()
+        count = self.get_buffer_count()
+        self.configure_buffer(1)
         raw = self.query(":READ?")
         errs = self._check_errors()
+        self.configure_buffer(count)
         if errs:
             detail = "; ".join(errs)
             raise Keithley6487Error(f"Keithley SCPI errors during measure_current_single: {detail}")
@@ -233,8 +236,27 @@ class Keithley6487:
     def auto_zero(self) -> None:
         """Simulation of "ONCE" mode."""
         self.write(":SYST:AZER ON")
+        self.measure_current_single()
+        self.query("*OPC?")
         self.write(":SYST:AZER OFF")
-        self.write("*CLS")
+
+    def perform_initial_zero_correction(self) -> None:
+        """Performs a high-quality initial zero calibration (Zero Correct)."""
+        self.clear_errors()
+        try:
+            self.write(":SYST:ZCH ON")
+            self.write(":SYST:AZER ON")
+            self.write(":INIT")
+            self.query("*OPC?")
+            self.write(":SYST:ZCOR:ACQ")
+            self.write(":SYST:ZCOR ON")
+            self.write(":SYST:AZER OFF")
+            self.write(":SYST:ZCH OFF")
+            self._check_errors()
+        except Exception as exc:
+            self.write(":SYST:ZCH OFF")
+            raise Keithley6487Error(f"Ошибка при начальной калибровке нуля: {exc}")
+
 
     # ------------------------------------------------------------------
     # Built-in voltage source (Keithley 6487)

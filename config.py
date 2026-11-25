@@ -10,6 +10,10 @@ TCM_BAUDRATE = int(os.environ.get("TCM_BAUDRATE", "57600"))
 TCM_TIMEOUT = float(os.environ.get("TCM_TIMEOUT", "1.0"))
 TCM_WRITE_TIMEOUT = float(os.environ.get("TCM_WRITE_TIMEOUT", "1.0"))
 
+# --- Safety limits (temperature in °C) ---
+SAFETY_MIN_TEMP = float(os.environ.get("SAFETY_MIN_TEMP", "-50.0"))
+SAFETY_MAX_TEMP = float(os.environ.get("SAFETY_MAX_TEMP", "150.0"))
+
 # --- Keithley 6487 (GPIB via NI-VISA) ---
 KEITHLEY_VISA_ADDRESS = os.environ.get("KEITHLEY_VISA_ADDRESS", "GPIB0::22::INSTR")
 KEITHLEY_TIMEOUT_MS = int(os.environ.get("KEITHLEY_TIMEOUT_MS", "5000"))
@@ -28,9 +32,8 @@ SOURCE_CURRENT_LIMIT_50V_500V = float(os.environ.get("SOURCE_CURRENT_LIMIT_50V_5
 SOURCE_RAMP_DEFAULT_TIME = float(os.environ.get("SOURCE_RAMP_DEFAULT_TIME", "10.0"))   # seconds
 SOURCE_RAMP_DEFAULT_STEPS = int(os.environ.get("SOURCE_RAMP_DEFAULT_STEPS", "10"))
 
-# --- Safety limits (temperature in °C) ---
-SAFETY_MIN_TEMP = float(os.environ.get("SAFETY_MIN_TEMP", "-50.0"))
-SAFETY_MAX_TEMP = float(os.environ.get("SAFETY_MAX_TEMP", "150.0"))
+# --- Keithley 6487 autozero time ---
+KEITHLEY_AUTOZERO_TIME = 30  # minute
 
 # --- Data export ---
 EXPORT_DELIMITER = "\t"
@@ -39,12 +42,12 @@ EXPORT_DIR = "data"                      # folder next to main.py
 EXPORT_FILENAME = "measurement"          # name without extension; program adds .txt itself
 EXPORT_AUTO_CREATE_DIR = True            # create data folder if it does not exist
 
-# --- Interface ---
-UPDATE_INTERVAL_MS = 1000          # GUI update interval (ms)
-PLOT_MAX_POINTS = 5000            # max points on plot (old ones removed)
-
 # --- Temperature status threshold (°C) ---
 # |actual - target| below this value => stable (0)
 # actual > target + threshold => cooling (-1)
 # actual < target - threshold => heating (1)
 TEMP_STATUS_THRESHOLD = 0.5
+
+# --- Interface ---
+UPDATE_INTERVAL_MS = 1000          # GUI update interval (ms)
+PLOT_MAX_POINTS = 5000            # max points on plot (old ones removed)
