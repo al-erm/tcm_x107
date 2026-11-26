@@ -14,7 +14,7 @@ Application for measuring current vs temperature: TCM-X107 temperature controlle
 - Connecting and controlling TCM-X107 via virtual COM port
 - Keithley 6487 current measurement with buffered acquisition
 - Temperature profile: target temperature, ramp speed, hold time
-- Real-time graphs: T-t, I-t, I-T (tabs)
+- Real-time graphs: T-t, I-t, I-T (tabs) plus shared "All" tab with dynamic decimation to avoid the accordion effect
 - Current samples graph (residuals from mean)
 - Export measurements to `.txt` (tab-delimited, write per point to disk)
 - Emergency stop (disables TCM-X107 output and stops profile)
@@ -100,7 +100,7 @@ tcm_x107/
 │
 ├── core/                   # Business logic
 │   ├── controller.py       # Temperature profile (target, hold, emergency stop)
-│   ├── data_manager.py     # Export points to .txt (write immediately to disk)
+│   ├── data_manager.py     # Export points to .txt; also holds PlotDecimator for dynamic decimation
 │   ├── math_processing.py  # Median filtering, outliers, confidence interval
 │   ├── settings_manager.py # Settings saving (settings.json)
 │   └── settings.json       # User settings (created on first save)
@@ -145,7 +145,7 @@ If you specify your own name and a file with that name already exists, the progr
 
 ## Safety
 
-- Temperature range limited by `SAFETY_MIN_TEMP` / `SAFETY_MAX_TEMP` (default 0–100 °C).
+- Temperature range limited by `SAFETY_MIN_TEMP` / `SAFETY_MAX_TEMP` (default -50 to +150 °C).
 - **EMERGENCY STOP** button disables TCM-X107 output (`TCSW=0`, `TCOE=0`) and stops the profile.
 - On program close: profile stops, both instruments disconnect.
 

@@ -39,7 +39,7 @@ from config import (
 from instruments.tcm_x107 import TCMX107, TCMX107Error  # noqa: E402
 from instruments.keithley_6487 import Keithley6487, Keithley6487Error  # noqa: E402
 from core.controller import TemperatureController  # noqa: E402
-from core.data_manager import DataManager  # noqa: E402
+from core.data_manager import DataManager, PlotDecimator  # noqa: E402
 from core.math_processing import robust_average_current  # noqa: E402
 from core.settings_manager import SettingsManager  # noqa: E402
 
@@ -49,7 +49,7 @@ import gui.themes as themes  # noqa: E402
 
 class MeasurementWorker(QObject):
     data_ready = pyqtSignal(float, float, float, float)
-    samples_ready = pyqtSignal(object, float, float, object)
+    samples_ready = pyqtSignal(object, float, float, object, float, float)
     error_occurred = pyqtSignal(str)
     measure_requested = pyqtSignal()
 
@@ -117,7 +117,7 @@ class MeasurementWorker(QObject):
 
             if self.keithley is not None and self.keithley.is_connected:
                 currents = self.keithley.read_buffer()
-                curr, curr_err, outlier_indices = robust_average_current(currents)
+                curr, curr_err, outlier_indices, slope, intercept = robust_average_current(currents)
                 # Comparing buffer size and value with UI
                 if self._current_count != self._buffer_count:
                     self.keithley.configure_buffer(self._current_count)
@@ -125,6 +125,7 @@ class MeasurementWorker(QObject):
                 curr, curr_err = 0.0, 0.0
                 currents = []
                 outlier_indices = []
+                slope, intercept = 0.0, 0.0
 
             status = self._get_temp_status(temp)
 
@@ -136,7 +137,7 @@ class MeasurementWorker(QObject):
             )
             pt = self.data_manager.points[-1]
             self.data_ready.emit(pt.timestamp, temp, curr, curr_err)
-            self.samples_ready.emit(currents, curr, curr_err, list(outlier_indices))
+            self.samples_ready.emit(currents, curr, curr_err, list(outlier_indices), slope, intercept)
         except Exception as exc:
             self.error_occurred.emit(str(exc))
 
@@ -382,6 +383,7 @@ class MainWindow(QMainWindow):
         self.keithley = None
         self.controller = None
         self.data_manager = DataManager()
+        self.decimator = PlotDecimator()
 
         self._tcm_model = ""
         self._keithley_ident = ""
@@ -655,16 +657,19 @@ class MainWindow(QMainWindow):
         self.plot_temp_time = pg.PlotWidget()
         self.plot_temp_time.showGrid(x=True, y=True)
         self.curve_temp = self.plot_temp_time.plot(pen=pg.mkPen(themes.PLOT_COLOR_TEMP, width=1.7))
+        self.curve_temp.setDownsampling(ds=True, auto=True, method='peak')
         self.tabs.addTab(self.plot_temp_time, "T vs t")
 
         self.plot_current_time = pg.PlotWidget()
         self.plot_current_time.showGrid(x=True, y=True)
         self.curve_current = self.plot_current_time.plot(pen=pg.mkPen(themes.PLOT_COLOR_CURRENT, width=1.7))
+        self.curve_current.setDownsampling(ds=True, auto=True, method='peak')
         self.tabs.addTab(self.plot_current_time, "I vs t")
 
         self.plot_current_temp = pg.PlotWidget()
         self.plot_current_temp.showGrid(x=True, y=True)
         self.curve_current_temp = self.plot_current_temp.plot(pen=pg.mkPen(themes.PLOT_COLOR_CURRENT_TEMP, width=1.7))
+        self.curve_current_temp.setDownsampling(ds=True, auto=True, method='peak')
         self.tabs.addTab(self.plot_current_temp, "I vs T")
 
         # --- Fourth tab ---
@@ -674,11 +679,13 @@ class MainWindow(QMainWindow):
         self.plot_temp_all = pg.PlotWidget()
         self.plot_temp_all.showGrid(x=True, y=True)
         self.curve_temp_all = self.plot_temp_all.plot(pen=pg.mkPen(themes.PLOT_COLOR_TEMP, width=1.2))
+        self.curve_temp_all.setDownsampling(ds=True, auto=True, method='peak')
         all_layout.addWidget(self.plot_temp_all, 0, 0)
 
         self.plot_current_time_all = pg.PlotWidget()
         self.plot_current_time_all.showGrid(x=True, y=True)
         self.curve_current_all = self.plot_current_time_all.plot(pen=pg.mkPen(themes.PLOT_COLOR_CURRENT, width=1.2))
+        self.curve_current_all.setDownsampling(ds=True, auto=True, method='peak')
         all_layout.addWidget(self.plot_current_time_all, 0, 1)
 
         self.plot_current_temp_all = pg.PlotWidget()
@@ -690,6 +697,7 @@ class MainWindow(QMainWindow):
             symbolPen=None,
             pen=None 
         )
+        self.curve_current_temp_all.setDownsampling(ds=True, auto=True, method='peak')
         all_layout.addWidget(self.plot_current_temp_all, 1, 0)
 
         self.plot_samples = pg.PlotWidget()
@@ -873,7 +881,7 @@ class MainWindow(QMainWindow):
         self.btn_stop_profile.setEnabled(False)
         self.statusBar.showMessage(tr("msg.profile_stopped"))
 
-    def _on_profile_update(self, actual: float, set_val: float, timestamp: float) -> None:
+    def _on_profile_update(self, actual: float, set_val: float) -> None:
         self.lbl_actual_temp.setText(f"{tr('lbl.actual_temp')}: {actual:.2f} °C")  # noqa: E231
         self.lbl_set_temp.setText(f"{tr('lbl.set_temp')}: {set_val:.2f} °C")  # noqa: E231
         if self.tcm is not None and self.tcm.is_connected:
@@ -1029,12 +1037,12 @@ class MainWindow(QMainWindow):
         try:
             self.keithley.configure_buffer(self.spin_meas_count.value())
             currents = self.keithley.read_buffer()
-            curr, curr_err, outlier_indices = robust_average_current(currents)
+            curr, curr_err, outlier_indices, slope, intercept = robust_average_current(currents)
             self.lbl_keithley_current.setText(f"{tr('lbl.current')}: {curr: .6e} A")
             self.lbl_keithley_error.setText(f"{tr('lbl.error')}: {curr_err: .6e} A")
             self.statusBar.showMessage(tr("msg.keithley_buffer").format(count=len(currents)))
-            # Draw raw samples on the samples plot (residuals + outliers)
-            self._update_samples_plot(currents, curr, curr_err, list(outlier_indices))
+            # Draw raw samples on the samples plot (residuals from the fitted line + outliers)
+            self._update_samples_plot(currents, curr, curr_err, list(outlier_indices), slope, intercept)
         except Exception as exc:
             QMessageBox.critical(self, tr("err.title_measure"), str(exc))
         self._show_keithley_errors()
@@ -1145,6 +1153,9 @@ class MainWindow(QMainWindow):
             return
         # Pass the already connected instrument to DataManager before starting
         self.data_manager.keithley = self.keithley
+        # Clear decimator so old points from a previous run do not stay on
+        # the shared "All" tab when a new measurement starts.
+        self.decimator.clear()
 
         self._worker = MeasurementWorker(self.tcm, self.keithley, self.data_manager)
         if self.keithley is not None and self.keithley.is_connected:
@@ -1224,38 +1235,67 @@ class MainWindow(QMainWindow):
         # Redraw right-panel graphs immediately, so they don't lag behind _poll_gui ticks.
         self._redraw_right_plots()
 
+        # Parallel write to the shared-tab plot buffer with dynamic decimation.
+        self.decimator.add_point(timestamp, temp, curr)
+
     def _redraw_right_plots(self) -> None:
-        """Redraw right-panel temperature/current graphs from stored points."""
+        """Redraw right-panel temperature/current graphs from stored points.
+
+        First three tabs draw from DataManager ring buffer. The shared
+        "All" tab draws from PlotDecimator with dynamic decimation to avoid
+        the accordion effect.
+        """
         if not self.data_manager.points:
             return
-        time_p, temp, cur, err = self.data_manager.get_arrays()
+
+        # --- First three tabs: DataManager (unchanged ring buffer) ---
+        time_p, temp, cur = self.data_manager.get_arrays()
         if len(time_p) > PLOT_MAX_POINTS:
             time_p = time_p[-PLOT_MAX_POINTS:]
             temp = temp[-PLOT_MAX_POINTS:]
             cur = cur[-PLOT_MAX_POINTS:]
-            err = err[-PLOT_MAX_POINTS:]
+
         # Temperature graph is always shown (TCM-X107 data).
         self.curve_temp.setData(time_p, temp)
-        self.curve_temp_all.setData(time_p, temp)
-        # Current graphs only when Keithley 6487 is connected.
-        # When disconnected, zeros are still logged to file but not plotted.
+
         keithley_connected = (self.keithley is not None and self.keithley.is_connected)
         if keithley_connected:
             self.curve_current.setData(time_p, cur)
             self.curve_current_temp.setData(temp, cur)
-            self.curve_current_all.setData(time_p, cur)
-            self.curve_current_temp_all.setData(temp, cur)
         else:
             self.curve_current.setData([], [])
             self.curve_current_temp.setData([], [])
+
+        # --- Fourth tab ("All"): PlotDecimator with dynamic decimation ---
+        d_time, d_temp, d_cur = self.decimator.get_arrays()
+        if d_time:
+            self.curve_temp_all.setData(d_time, d_temp)
+            if keithley_connected:
+                self.curve_current_all.setData(d_time, d_cur)
+                self.curve_current_temp_all.setData(d_temp, d_cur)
+            else:
+                self.curve_current_all.setData([], [])
+                self.curve_current_temp_all.setData([], [])
+        else:
+            self.curve_temp_all.setData([], [])
             self.curve_current_all.setData([], [])
             self.curve_current_temp_all.setData([], [])
 
-    def _update_samples_plot(self, currents, mean: float, error: float, outliers) -> None:
+    def _update_samples_plot(
+        self, currents, mean: float, error: float, outliers, slope: float = 0.0,
+        intercept: float = 0.0,
+    ) -> None:
         """Draw current samples on the samples plot.
 
-        Draws vertical stem lines from zero for every residual (current − mean),
-        highlights rejected outliers in red on their original sample indices.
+        Draws vertical stem lines from zero for every residual (current − fitted
+        line), where the fitted line is the Siegel regression used by
+        ``robust_average_current`` for outlier rejection. Rejected outliers are
+        highlighted in red on their original sample indices.
+
+        Using residuals from the fitted line (not from a constant mean) keeps the
+        plot consistent with the outlier detection: a slow drift is absorbed by
+        the line, so only true deviations from the trend appear as large stems
+        and are coloured red.
         """
         # Clear previous stems and outliers
         for line in self._stem_lines:
@@ -1270,7 +1310,8 @@ class MainWindow(QMainWindow):
             return
 
         x = np.arange(n, dtype=float)
-        residuals = np.array(currents, dtype=float) - mean
+        fitted = slope * x + intercept
+        residuals = np.array(currents, dtype=float) - fitted
 
         outlier_set = set(outliers) if outliers else set()
 
@@ -1314,7 +1355,7 @@ class MainWindow(QMainWindow):
                 self.lbl_actual_i.setText(f"{tr('lbl.actual_current')}: {tcm_current:.3f} A")  # noqa: E231
                 self.lbl_info.setText(f"{tr('lbl.info')}: {info_text}")
                 if self.controller is not None and not self.controller.is_running():
-                    self._on_profile_update(temp, set_val, 0.0)
+                    self._on_profile_update(temp, set_val)
             except Exception:
                 pass
 

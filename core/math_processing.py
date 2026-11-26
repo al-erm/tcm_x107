@@ -12,7 +12,8 @@ P = 0.95  # confidence probability
 BOOTSTRAP_REPLICATES = 200  # bootstrap replicates for the CI (kept low for speed)
 
 
-def robust_average_current(currents: List[float], threshold: float = 3.0) -> Tuple[float, float, np.ndarray]:
+def robust_average_current(currents: List[float], threshold: float = 3.0) -> \
+        Tuple[float, float, np.ndarray, float, float]:
     """Robust averaging of current measurements via Siegel slopes + outlier rejection.
 
     Algorithm:
@@ -23,10 +24,11 @@ def robust_average_current(currents: List[float], threshold: float = 3.0) -> Tup
     4. Mark the single point with the largest |residual| as outlier if
        |residual| > threshold · s.
     5. Remove that one outlier and repeat from step 1 until no outliers remain.
-    6. Return (mean_current, confidence_interval_half_width, outlier_indices):
+    6. Return (mean_current, confidence_interval_half_width, outlier_indices, slope, intercept):
        - mean_current       = mean of the fitted values over the cleaned x-range
        - error              = t_coeff(P, n-1) · s / √n   (two-sided Student's interval)
        - outlier_indices    = original sample indices that were rejected as outliers
+       - slope, intercept   = final Siegel fit parameters (residuals are computed against this line)
 
     Parameters
     ----------
@@ -51,7 +53,7 @@ def robust_average_current(currents: List[float], threshold: float = 3.0) -> Tup
         if y.size < 2:
             # Not enough points for regression; fall back to plain mean
             mean_val = float(np.mean(y)) if y.size > 0 else 0.0
-            return mean_val, 0.0, np.array(sorted(all_outlier_indices), dtype=int)
+            return mean_val, 0.0, np.array(sorted(all_outlier_indices), dtype=int), 0.0, mean_val
 
         # Siegel slopes – robust linear fit, insensitive to outliers
         slope, intercept = siegelslopes(y, x_work, method='separate')
@@ -102,7 +104,7 @@ def robust_average_current(currents: List[float], threshold: float = 3.0) -> Tup
         error = t_coeff * std_res / np.sqrt(n)
     else:
         error = 0.0
-    return current_mean, float(error), np.array(sorted(all_outlier_indices), dtype=int)
+    return current_mean, float(error), np.array(sorted(all_outlier_indices), dtype=int), slope, intercept
 
 
 def _bootstrap_mean_level(x: np.ndarray, y: np.ndarray,

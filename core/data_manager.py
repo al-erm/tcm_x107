@@ -16,7 +16,7 @@ from typing import List, Optional
 from instruments.keithley_6487 import Keithley6487
 
 from config import (EXPORT_DELIMITER, EXPORT_ENCODING, EXPORT_FILENAME, EXPORT_DIR, EXPORT_AUTO_CREATE_DIR, 
-                    KEITHLEY_AUTOZERO_TIME)
+                    KEITHLEY_AUTOZERO_TIME, PLOT_MAX_POINTS)
 
 
 @dataclass
@@ -216,9 +216,75 @@ class DataManager:
 
     def get_arrays(self):
         if not self.points:
-            return [], [], [], []
+            return [], [], []
         time_p = [p.timestamp for p in self.points]
         temp = [p.temperature for p in self.points]
         cur = [p.current for p in self.points]
-        err = [p.current_error for p in self.points]
-        return time_p, temp, cur, err
+        return time_p, temp, cur
+
+
+class PlotDecimator:
+    """
+    Buffer with dynamic decimation for shared (all-in-one) plots.
+
+    Keeps its own arrays (time_p, temp, cur, err) limited by PLOT_MAX_POINTS.
+    While the arrays are smaller than PLOT_MAX_POINTS every incoming point
+    is stored (skip_step = 1). Once the arrays reach PLOT_MAX_POINTS:
+
+        * every second element is removed from each array (size halves);
+        * skip_step is doubled;
+        * the internal counter is reset so the decimation phase stays aligned.
+
+    Afterwards only points whose internal counter is a multiple of skip_step
+    are stored. The cycle repeats each time the arrays fill up again.
+    """
+
+    def __init__(self, max_points: int = PLOT_MAX_POINTS) -> None:
+        self.max_points = int(max_points)
+        self.time_p: list[float] = []
+        self.temp: list[float] = []
+        self.cur: list[float] = []
+        self.skip_step: int = 1
+        self._since_last_decimate: int = 0
+
+    def add_point(
+        self,
+        timestamp: float,
+        temperature: float,
+        current: float,
+    ) -> None:
+        """Offer one measurement point. It may be skipped depending on skip_step."""
+        self._since_last_decimate += 1
+        if self._since_last_decimate % self.skip_step != 0:
+            return
+
+        self.time_p.append(timestamp)
+        self.temp.append(temperature)
+        self.cur.append(current)
+
+        if len(self.time_p) >= self.max_points:
+            self._decimate()
+
+    def _decimate(self) -> None:
+        """Remove every second element and double the skip step."""
+        self.time_p = self.time_p[::2]
+        self.temp = self.temp[::2]
+        self.cur = self.cur[::2]
+        self.skip_step *= 2
+        # Reset phase counter so the remaining elements and new elements stay aligned.
+        self._since_last_decimate = 0
+
+    def get_arrays(self) -> tuple[list[float], list[float], list[float]]:
+        """Return current (time, temperature, current, error) arrays."""
+        return self.time_p, self.temp, self.cur
+
+    def __len__(self) -> int:
+        return len(self.time_p)
+
+    def clear(self) -> None:
+        """Reset all buffers and counters."""
+        self.time_p.clear()
+        self.temp.clear()
+        self.cur.clear()
+        self.skip_step = 1
+        self._since_last_decimate = 0

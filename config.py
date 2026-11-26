@@ -50,4 +50,4 @@ TEMP_STATUS_THRESHOLD = 0.5
 
 # --- Interface ---
 UPDATE_INTERVAL_MS = 1000          # GUI update interval (ms)
-PLOT_MAX_POINTS = 5000            # max points on plot (old ones removed)
+PLOT_MAX_POINTS = 20000            # max points per buffer; also the decimation threshold for PlotDecimator
