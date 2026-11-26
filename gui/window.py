@@ -120,7 +120,7 @@ class MeasurementWorker(QObject):
                 curr, curr_err, outlier_indices, slope, intercept = robust_average_current(currents)
                 # Comparing buffer size and value with UI
                 if self._current_count != self._buffer_count:
-                    self.keithley.configure_buffer(self._current_count)
+                    self.set_buffer_count(self._current_count)
             else:
                 curr, curr_err = 0.0, 0.0
                 currents = []
