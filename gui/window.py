@@ -697,7 +697,7 @@ class MainWindow(QMainWindow):
             symbolPen=None,
             pen=None 
         )
-        self.curve_current_temp_all.setDownsampling(ds=True, auto=True, method='peak')
+        self.curve_current_temp_all.setDownsampling(ds=True, auto=True, method='subsample')
         all_layout.addWidget(self.plot_current_temp_all, 1, 0)
 
         self.plot_samples = pg.PlotWidget()
