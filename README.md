@@ -17,7 +17,7 @@ Application for measuring current vs temperature: TCM-X107 temperature controlle
 - Real-time graphs: T-t, I-t, I-T (tabs) plus shared "All" tab with dynamic decimation to avoid the accordion effect
 - Current samples graph (residuals from mean)
 - Export measurements to `.txt` (tab-delimited, write per point to disk)
-- Emergency stop (disables TCM-X107 output and stops profile)
+- Emergency stop (disables TCM-X107 and Keithley outputs, safely terminates background acquisition, and stops profile)
 
 > Interface in two languages (en/ru) with runtime switching and three themes (system/light/dark) configurable directly in the program window.
 
@@ -77,8 +77,8 @@ All settings are taken from `config.py` or environment variables:
 TCM_PORT=COM10                          # COM port TCM-X107
 TCM_BAUDRATE=57600                      # Baud rate
 KEITHLEY_VISA_ADDRESS=GPIB0::22::INSTR  # GPIB address Keithley 6487
-SAFETY_MIN_TEMP=0.0                     # Lower temperature limit (°C)
-SAFETY_MAX_TEMP=100.0                   # Upper temperature limit (°C)
+SAFETY_MIN_TEMP=-50.0                   # Lower temperature limit (°C)
+SAFETY_MAX_TEMP=150.0                   # Upper temperature limit (°C)
 TEMP_STATUS_THRESHOLD=0.5               # Temperature stability threshold (°C)
 ```
 
@@ -146,7 +146,7 @@ If you specify your own name and a file with that name already exists, the progr
 ## Safety
 
 - Temperature range limited by `SAFETY_MIN_TEMP` / `SAFETY_MAX_TEMP` (default -50 to +150 °C).
-- **EMERGENCY STOP** button disables TCM-X107 output (`TCSW=0`, `TCOE=0`) and stops the profile.
+- **EMERGENCY STOP** button disables TCM-X107 output (`TCSW=0`, `TCOE=0`), cuts off the Keithley voltage source, terminates active measurement threads without freezing the GPIB bus, and displays a summary dialog showing which instruments were successfully disconnected.
 - On program close: profile stops, both instruments disconnect.
 
 ---

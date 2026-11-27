@@ -142,6 +142,13 @@ class Keithley6487:
         """Return instrument identification string (*IDN?)."""
         return self.query("*IDN?")
 
+    def clear(self) -> None:
+        """Forcefully release the GPIB bus for the background thread."""
+        try:
+            self._inst.clear()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Buffer measurements (N points at once: current)
     # ------------------------------------------------------------------

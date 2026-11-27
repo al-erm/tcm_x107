@@ -17,10 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6.QtCore import QTimer, QObject, QThread, pyqtSignal, pyqtSlot, Qt  # noqa: E402
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QSplitter, QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox,
-    QSpinBox, QCheckBox, QMessageBox, QDialog, QStatusBar, QTabWidget, QComboBox,
-    QProgressBar,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
+    QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox, QSpinBox, QCheckBox,
+    QMessageBox, QDialog, QStatusBar, QTabWidget, QComboBox, QProgressBar,
 )  # noqa: E402
 from PyQt6.QtGui import QCloseEvent, QFont, QFontMetrics  # noqa: E402
 
@@ -32,8 +31,7 @@ from config import (
     KEITHLEY_VISA_ADDRESS, KEITHLEY_TIMEOUT_MS,
     SAFETY_MIN_TEMP, SAFETY_MAX_TEMP, UPDATE_INTERVAL_MS, PLOT_MAX_POINTS,
     TEMP_STATUS_THRESHOLD, EXPORT_FILENAME, EXPORT_DIR,
-    SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS,
-    SOURCE_VOLTAGE_RANGE_500
+    SOURCE_RAMP_DEFAULT_TIME, SOURCE_RAMP_DEFAULT_STEPS, SOURCE_VOLTAGE_RANGE_500
 )  # noqa: E402
 
 from instruments.tcm_x107 import TCMX107, TCMX107Error  # noqa: E402
@@ -392,9 +390,7 @@ class MainWindow(QMainWindow):
         self._worker_thread = None
         self._gui_timer = None
         self._measure_timer = None
-        self._profile_signal.connect(
-            self._on_profile_update, Qt.ConnectionType.QueuedConnection
-        )
+        self._profile_signal.connect(self._on_profile_update, Qt.ConnectionType.QueuedConnection)
         # Stem lines / outlier highlights for the current-samples plot (drawn on plot_samples)
         self._stem_lines: list = []
         self._scatter_items: list = []
@@ -669,7 +665,6 @@ class MainWindow(QMainWindow):
         self.plot_current_temp = pg.PlotWidget()
         self.plot_current_temp.showGrid(x=True, y=True)
         self.curve_current_temp = self.plot_current_temp.plot(pen=pg.mkPen(themes.PLOT_COLOR_CURRENT_TEMP, width=1.7))
-        self.curve_current_temp.setDownsampling(ds=True, auto=True, method='peak')
         self.tabs.addTab(self.plot_current_temp, "I vs T")
 
         # --- Fourth tab ---
@@ -697,7 +692,6 @@ class MainWindow(QMainWindow):
             symbolPen=None,
             pen=None 
         )
-        self.curve_current_temp_all.setDownsampling(ds=True, auto=True, method='subsample')
         all_layout.addWidget(self.plot_current_temp_all, 1, 0)
 
         self.plot_samples = pg.PlotWidget()
@@ -904,6 +898,12 @@ class MainWindow(QMainWindow):
         self.tcm.set_oe(1 if state else 0)
 
     def _emergency_stop(self) -> None:
+        if self._worker is not None:
+            self._stop_worker()
+        if self.tcm is not None and self.tcm.is_connected:
+            self.tcm.emergency_stop()
+        if self.controller is not None:
+            self.controller.stop_profile()
         keithley_off = True
         if self.keithley is not None and self.keithley.is_connected:
             try:
@@ -911,21 +911,32 @@ class MainWindow(QMainWindow):
                 self.chk_source_output.setChecked(False)
             except Exception:
                 keithley_off = False
-        if self.tcm is not None:
-            self.tcm.emergency_stop()
-        if self.controller is not None:
-            self.controller.stop_profile()
         self.btn_start_profile.setEnabled(True)
         self.btn_stop_profile.setEnabled(False)
         self.chk_sw.setChecked(False)
         self.chk_oe.setChecked(False)
+        self.btn_start_meas.setChecked(False)
+        self.btn_start_meas.setText(tr("btn.start_meas"))
         self.statusBar.showMessage(tr("msg.emergency_stop"))
-        if keithley_off:
-            QMessageBox.warning(self, tr("dlg.emergency_title"), tr("dlg.emergency_text"))
+
+        # Preparing a message to disable device outputs
+        lines: list[str] = []
+        if self.tcm is not None and self.tcm.is_connected:
+            lines.append(tr("dlg.emergency_text"))
+        if self.keithley is not None and self.keithley.is_connected:
+            if keithley_off:
+                lines.append(tr("dlg.emergency_keithley_off"))
+            else:
+                lines.append(tr("err.keithley_not_disabled"))
+        if not lines:
+            QMessageBox.warning(
+                self, tr("dlg.emergency_title"), tr("dlg.emergency_nothing"))
+        elif self.keithley is not None and self.keithley.is_connected and not keithley_off:
+            QMessageBox.critical(
+                self, tr("dlg.emergency_title"), "\n".join(lines))
         else:
-            QMessageBox.critical(self, tr("dlg.emergency_title"),
-                                 tr("dlg.emergency_text") + "\n" +
-                                 tr("err.keithley_not_disabled"))
+            QMessageBox.warning(
+                self, tr("dlg.emergency_title"), "\n".join(lines))
 
     def _toggle_keithley_connection(self) -> None:
         if self.btn_connect_keithley.isChecked():
@@ -1194,10 +1205,13 @@ class MainWindow(QMainWindow):
         """Stop the measurement worker thread."""
         if self._worker is None:
             return
+        if self._worker is not None:
+            self._worker.stop()
         self._measure_timer.stop()
         # Re-enable single-shot measure once continuous acquisition stops,
         # but only if Keithley is actually connected.
         if self.keithley is not None and self.keithley.is_connected:
+            self.keithley.clear()
             self.btn_meas_once.setEnabled(True)
             self.btn_apply_voltage.setEnabled(True)
             self.chk_source_output.setEnabled(True)
@@ -1205,8 +1219,6 @@ class MainWindow(QMainWindow):
                 self.spin_meas_count.valueChanged.disconnect(self._worker.set_current_count)
             except (TypeError, RuntimeError):
                 pass
-        if self._worker is not None:
-            self._worker.stop()
         if self._worker_thread is not None:
             self._worker_thread.quit()
             if not self._worker_thread.wait(3000):

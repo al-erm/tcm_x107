@@ -19,8 +19,7 @@ DEFAULT_FONT = QFont("Sans Serif", 9)
 
 
 def apply_theme(app: QApplication, theme: str) -> None:
-    """
-    Apply the app theme.
+    """Apply the app theme.
     theme: 'system' | 'light' | 'dark'
 
     'system' – reset color scheme (system default).

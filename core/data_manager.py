@@ -224,8 +224,7 @@ class DataManager:
 
 
 class PlotDecimator:
-    """
-    Buffer with dynamic decimation for shared (all-in-one) plots.
+    """Buffer with dynamic decimation for shared (all-in-one) plots.
 
     Keeps its own arrays (time_p, temp, cur, err) limited by PLOT_MAX_POINTS.
     While the arrays are smaller than PLOT_MAX_POINTS every incoming point

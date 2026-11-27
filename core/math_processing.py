@@ -110,8 +110,7 @@ def robust_average_current(currents: List[float], threshold: float = 3.0) -> \
 def _bootstrap_mean_level(x: np.ndarray, y: np.ndarray,
                           n_replicates: int = BOOTSTRAP_REPLICATES,
                           seed: int | None = None) -> Tuple[float, float]:
-    """
-    Bootstrap percentile confidence interval for the mean level of a line.
+    """Bootstrap percentile confidence interval for the mean level of a line.
 
     Resamples (x, y) pairs with replacement, fits an ordinary least-squares
     line on each replicate, evaluates it at mean(x), and returns the bootstrap

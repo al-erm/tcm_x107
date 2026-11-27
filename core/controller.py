@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from instruments.tcm_x107 import TCMX107  # type: ignore
 from config import SAFETY_MIN_TEMP, SAFETY_MAX_TEMP
 
+
 class TemperatureController:
     def __init__(self, instrument: TCMX107) -> None:
         self.instrument = instrument
